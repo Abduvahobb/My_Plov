@@ -1,0 +1,120 @@
+# Har safar main'ga yuklanganda GitHub o'zi yig'adi:
+#  1) Android APK (telefon)        2) Windows dasturi (kompyuter, .exe)
+#  3) Brauzerda o'ynash sahifasi (gh-pages shoxchasi → GitHub Pages)
+# Tayyor fayllar: Releases bo'limida (eng oxirgisi).
+# Multiplayer uchun: Settings → Secrets and variables → Actions → Variables → SERVER_URL = wss://sizning-server.onrender.com
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - name: O'yin fayllari
+        run: |
+          mkdir -p apkbuild/www
+          cp index.html game.js world.js economy.js apkbuild/www/
+          if [ -n "${{ vars.SERVER_URL }}" ]; then sed -i "s#const DEFAULT_SERVER = '';#const DEFAULT_SERVER = '${{ vars.SERVER_URL }}';#" apkbuild/www/game.js; fi
+      - name: Capacitor
+        working-directory: apkbuild
+        run: |
+          npm init -y > /dev/null
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          npx cap init "Osh markazi" uz.oshmarkazi.game --web-dir www
+          npx cap add android
+          sed -i 's/<activity/<activity android:screenOrientation="sensorLandscape"/' android/app/src/main/AndroidManifest.xml
+          npx cap sync android
+      - name: APK yig'ish
+        working-directory: apkbuild/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../../OshMarkazi.apk
+      - uses: actions/upload-artifact@v4
+        with: { name: apk, path: OshMarkazi.apk }
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Kompyuter dasturi (Electron)
+        shell: bash
+        run: |
+          mkdir -p desk/www && cd desk
+          cp ../index.html ../game.js ../world.js ../economy.js www/
+          if [ -n "${{ vars.SERVER_URL }}" ]; then sed -i "s#const DEFAULT_SERVER = '';#const DEFAULT_SERVER = '${{ vars.SERVER_URL }}';#" www/game.js; fi
+          sed -i 's#<script type="module" src="./game.js"></script>#<script>window.OSH_DESKTOP = true;</script>\n<script type="module" src="./game.js"></script>#' www/index.html
+          cat > main.cjs <<'JS'
+          const { app, BrowserWindow } = require('electron');
+          const http = require('http'), fs = require('fs'), path = require('path');
+          const TYPES = { '.html': 'text/html', '.js': 'text/javascript' };
+          app.whenReady().then(() => {
+            const root = path.join(__dirname, 'www');
+            const srv = http.createServer((req, res) => {
+              const f = path.join(root, (req.url.split('?')[0].replace(/^\/+/, '') || 'index.html'));
+              if (!f.startsWith(root)) { res.writeHead(403); return res.end(); }
+              fs.readFile(f, (e, d) => { if (e) { res.writeHead(404); return res.end(); } res.writeHead(200, { 'Content-Type': TYPES[path.extname(f)] || 'application/octet-stream' }); res.end(d); });
+            }).listen(0, '127.0.0.1', () => {
+              const w = new BrowserWindow({ width: 1280, height: 800, autoHideMenuBar: true, title: 'Osh markazi' });
+              w.loadURL('http://127.0.0.1:' + srv.address().port + '/');
+            });
+          });
+          app.on('window-all-closed', () => app.quit());
+          JS
+          cat > package.json <<'JSON'
+          { "name": "osh-markazi", "version": "1.0.0", "main": "main.cjs", "description": "Osh markazi", "author": "Osh markazi",
+            "build": { "appId": "uz.oshmarkazi.desktop", "productName": "Osh markazi", "files": ["main.cjs", "www/**"],
+                       "win": { "target": "portable" }, "artifactName": "OshMarkazi-Windows.exe" } }
+          JSON
+          npm install --save-dev electron@31 electron-builder@24
+          CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --win portable --x64 --publish never
+          cp dist/OshMarkazi-Windows.exe ../OshMarkazi-Windows.exe
+      - uses: actions/upload-artifact@v4
+        with: { name: windows, path: OshMarkazi-Windows.exe }
+
+  pages:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sahifa fayllari
+        run: |
+          mkdir -p site && cp index.html game.js world.js economy.js site/ && touch site/.nojekyll
+          if [ -n "${{ vars.SERVER_URL }}" ]; then sed -i "s#const DEFAULT_SERVER = '';#const DEFAULT_SERVER = '${{ vars.SERVER_URL }}';#" site/game.js; fi
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          publish_branch: gh-pages
+
+  release:
+    needs: [apk, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Osh markazi v1.0.${{ github.run_number }}
+          make_latest: true
+          body: |
+            Telefon (Android): OshMarkazi.apk
+            Kompyuter (Windows): OshMarkazi-Windows.exe — yuklab olib ishga tushiring, o'rnatish shart emas.
+          files: |
+            out/OshMarkazi.apk
+            out/OshMarkazi-Windows.exe

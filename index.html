@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#161c33">
+<title>Osh markazi — 3D onlayn o'yin</title>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
+html,body{margin:0;height:100%;overflow:hidden;background:#161c33;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#fff;touch-action:none}
+canvas{display:block}
+.hide{display:none!important}
+button{font:inherit;cursor:pointer;border:0}
+.pill{background:rgba(0,0,0,.5);border-radius:20px;padding:6px 14px;font-size:14px;display:flex;align-items:center;gap:8px;white-space:nowrap}
+#hud{position:fixed;inset:0;pointer-events:none;z-index:5}
+#hud>*{pointer-events:auto}
+#topL{position:absolute;left:max(10px,env(safe-area-inset-left));top:10px;display:flex;flex-direction:column;gap:6px}
+#topR{position:absolute;right:max(10px,env(safe-area-inset-right));top:10px;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+.coin{width:14px;height:14px;border-radius:50%;background:#f2b632;box-shadow:inset 0 -2px 0 #b8801a}
+#bossBtn{position:absolute;left:50%;top:8px;transform:translateX(-50%);background:#f2b632;color:#3b2410;border:2px solid #fff;border-radius:20px;padding:8px 22px;font-weight:600;font-size:15px}
+#guide{position:absolute;left:50%;top:56px;transform:translateX(-50%);font-size:13px}
+#arrow{display:inline-block;width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:14px solid #f2b632}
+#kpanel{position:absolute;left:50%;top:92px;transform:translateX(-50%);min-width:220px;background:rgba(20,12,6,.6);border:1px solid rgba(242,182,50,.5);border-radius:12px;padding:8px 12px;font-size:13px}
+#kpanel .bar{height:6px;border-radius:3px;background:rgba(255,255,255,.2);margin-top:6px;overflow:hidden}
+#kpanel .bar i{display:block;height:100%;background:#f2b632;width:0}
+#joy{position:absolute;left:0;bottom:0;width:45%;height:55%}
+#joyBase{position:absolute;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.4);transform:translate(-50%,-50%);display:none}
+#joyKnob{position:absolute;left:50%;top:50%;width:52px;height:52px;margin:-26px 0 0 -26px;border-radius:50%;background:rgba(255,255,255,.55)}
+#btns{position:absolute;right:max(14px,env(safe-area-inset-right));bottom:max(18px,env(safe-area-inset-bottom));display:flex;align-items:flex-end;gap:12px}
+.rb{width:64px;height:64px;border-radius:50%;background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.6);color:#fff;font-size:12px}
+.rb.on{background:rgba(242,182,50,.75);color:#3b2410}
+#actBtn{min-width:120px;height:52px;border-radius:26px;background:#f2b632;color:#3b2410;border:2px solid #fff;font-weight:700;font-size:16px;padding:0 18px;margin-bottom:6px}
+#chatWrap{position:absolute;left:max(10px,env(safe-area-inset-left));top:120px;width:min(300px,60vw)}
+#chatLog{font-size:13px;max-height:120px;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;text-shadow:0 1px 2px #000}
+#chatLog b{color:#f6d27a;font-weight:600}
+#chatRow{display:flex;gap:6px;margin-top:6px}
+#chatIn{flex:1;min-width:0;background:rgba(0,0,0,.5);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:16px;padding:6px 12px;font:inherit;font-size:13px;user-select:text}
+#chatBtn{background:rgba(0,0,0,.5);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:16px;padding:0 12px;font-size:13px}
+#toasts{position:fixed;left:50%;bottom:110px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;z-index:30;pointer-events:none}
+.toast{background:rgba(15,20,40,.9);border:1px solid rgba(255,255,255,.25);border-radius:12px;padding:10px 16px;font-size:14px;pointer-events:auto;max-width:90vw;text-align:center}
+.toast button{margin:8px 4px 0;padding:6px 14px;border-radius:14px;background:#f2b632;color:#3b2410;font-weight:600}
+.toast button.no{background:#444;color:#fff}
+#fade{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .35s;z-index:20}
+/* menyu */
+#menu{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:25;display:flex;align-items:center;justify-content:center;padding:12px}
+#menuBox{background:#fbf6ec;color:#2b1a0a;border-radius:16px;width:min(560px,100%);max-height:92vh;display:flex;flex-direction:column;overflow:hidden;border:2px solid #c9a66b}
+#menuHead{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #e8dcc4}
+#menuHead h2{margin:0;font-size:18px}
+#menuHead small{display:block;color:#7a6a55;font-size:12px;font-weight:400}
+#menuClose{background:#eee3cf;border-radius:50%;width:34px;height:34px;font-size:18px;color:#2b1a0a}
+#tabs{display:flex;gap:6px;padding:10px 16px;flex-wrap:wrap}
+#tabs button{padding:7px 12px;border-radius:10px;background:#efe5d2;color:#3b2410;font-size:13px}
+#tabs button.on{background:#f2b632;font-weight:600}
+#menuBody{overflow:auto;padding:4px 16px 16px}
+.row{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid #ece2cf}
+.ic{width:40px;height:40px;border-radius:10px;background:#fae9c4;color:#8b4a1e;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0}
+.lv{display:flex;gap:3px;margin-top:5px}.lv i{width:18px;height:6px;border-radius:3px;background:#ddd0b8}.lv i.on{background:#e8a13a}
+.buy{background:#2e8b57;color:#fff;border-radius:10px;padding:8px 12px;font-size:13px;font-weight:600;white-space:nowrap}
+.buy:disabled{background:#c8bba5}
+.sub{font-size:12px;color:#7a6a55}
+.card{border:1px solid #e1d3b8;border-radius:12px;padding:10px;margin-top:8px}
+select{font:inherit;padding:4px 8px;border-radius:8px;border:1px solid #c9a66b;background:#fff;color:#2b1a0a}
+/* boshlash ekrani */
+#start{position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 30%,#3b2f5a,#0e1230)}
+#startBox{text-align:center;padding:24px;width:min(380px,92vw)}
+#startBox h1{font-size:38px;margin:0 0 4px;color:#f6d27a;letter-spacing:.5px}
+#startBox p{margin:0 0 22px;color:#cfc6e6}
+#nameIn{width:100%;padding:14px 16px;border-radius:12px;border:2px solid #c9a66b;background:#fbf6ec;color:#2b1a0a;font-size:17px;user-select:text;text-align:center}
+#genderRow{display:flex;gap:10px;margin-top:12px}#genderRow button{flex:1;padding:11px;border-radius:12px;background:rgba(255,255,255,.12);color:#fff;border:2px solid rgba(255,255,255,.3);font-size:16px}#genderRow button.on{background:#fff;color:#2b1a0a;border-color:#f2b632}
+#startBtn{margin-top:14px;width:100%;padding:14px;border-radius:12px;background:#f2b632;color:#3b2410;font-size:18px;font-weight:700}
+#startBtn:disabled{opacity:.5}
+#loadTxt{margin-top:14px;font-size:13px;color:#cfc6e6;min-height:18px}
+/* intro */
+#intro{position:fixed;inset:0;z-index:15;pointer-events:none}
+.lb{position:absolute;left:0;right:0;height:11vh;background:#000}
+#lbT{top:0}#lbB{bottom:0}
+#subtitle{position:absolute;left:50%;bottom:15vh;transform:translateX(-50%);background:rgba(0,0,0,.6);padding:8px 16px;border-radius:6px;font-size:18px;text-align:center;max-width:90vw}
+#skipBtn{position:absolute;right:16px;top:calc(11vh + 10px);pointer-events:auto;background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.6);border-radius:18px;padding:7px 16px}
+#muteIntro{position:absolute;left:16px;top:calc(11vh + 10px);pointer-events:auto;background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.6);border-radius:18px;padding:6px 12px;font-size:16px}
+#prog{position:absolute;left:5%;right:5%;bottom:5vh;height:4px;background:rgba(255,255,255,.25);border-radius:2px}
+#prog i{display:block;height:100%;width:0;background:#e8b04b;border-radius:2px}
+@media (max-width:600px){#bossBtn{padding:7px 16px;font-size:14px}.pill{font-size:12px;padding:5px 10px}#chatWrap{top:150px}}
+</style>
+</head>
+<body>
+<div id="start">
+  <div id="startBox">
+    <h1>Osh markazi</h1>
+    <p>Andijonda o'z oshxonangizni oching</p>
+    <input id="nameIn" maxlength="16" placeholder="Ismingiz" autocomplete="off">
+    <div id="genderRow"><button data-g="m">Erkak</button><button data-g="f">Ayol</button></div>
+    <button id="startBtn">Boshlash</button>
+    <div id="loadTxt"></div>
+  </div>
+</div>
+
+<div id="hud" class="hide">
+  <div id="topL">
+    <div class="pill"><span class="coin"></span><span id="money">0 so'm</span></div>
+    <div class="pill" id="ratingPill">★ <span id="rating">4.0</span></div>
+    <div class="pill hide" id="eventPill" style="background:rgba(194,24,91,.85)"><span id="eventTxt"></span></div>
+  </div>
+  <button id="bossBtn">Boshqaruv</button>
+  <div id="guide" class="pill"><span id="arrow"></span><span id="guideTxt"></span></div>
+  <div id="kpanel" class="hide">
+    <div id="kTitle" style="font-weight:600"></div>
+    <div id="kInfo"></div>
+    <div class="bar"><i id="kBar"></i></div>
+  </div>
+  <div id="topR">
+    <div class="pill"><span style="width:9px;height:9px;border-radius:50%;background:#4fc3f7;display:inline-block"></span><span id="online">Oflayn</span></div>
+    <button class="pill muteBtn" style="color:#fff;border:0">🔊</button>
+  </div>
+  <div id="chatWrap">
+    <div id="chatLog"></div>
+    <div id="chatRow"><input id="chatIn" maxlength="120" placeholder="Xabar yozing…" autocomplete="off"><button id="chatBtn">Yuborish</button></div>
+  </div>
+  <div id="joy"><div id="joyBase"><div id="joyKnob"></div></div></div>
+  <div id="btns">
+    <button id="actBtn" class="hide">Kirish</button>
+    <button id="runBtn" class="rb">Yugurish</button>
+    <button id="jumpBtn" class="rb">Sakrash</button>
+  </div>
+</div>
+
+<div id="menu" class="hide">
+  <div id="menuBox">
+    <div id="menuHead"><h2 id="menuTitle">Boshqaruv</h2><button id="menuClose">✕</button></div>
+    <div id="tabs">
+      <button data-t="up" class="on">Kuchaytirish</button>
+      <button data-t="work">Ishchilar</button>
+      <button data-t="part">Sheriklik</button>
+      <button data-t="bozor">Bozor</button>
+      <button data-t="order">Buyurtmalar</button>
+      <button data-t="top">Reyting</button>
+      <button data-t="biz">Yangi biznes</button>
+    </div>
+    <div id="menuBody"></div>
+  </div>
+</div>
+
+<div id="intro" class="hide">
+  <div class="lb" id="lbT"></div><div class="lb" id="lbB"></div>
+  <div id="subtitle" class="hide"></div>
+  <button id="skipBtn">O'tkazish ›</button>
+  <button class="muteBtn" id="muteIntro">🔊</button>
+  <div id="prog"><i id="progBar"></i></div>
+</div>
+
+<div id="toasts"></div>
+<div id="fade"></div>
+<script type="module" src="./game.js"></script>
+</body>
+</html>

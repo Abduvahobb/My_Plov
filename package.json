@@ -1,0 +1,16 @@
+{
+  "name": "osh-markazi",
+  "version": "0.1.0",
+  "description": "Osh markazi - O'zbekistonda 3D multiplayer oshxona o'yini",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
