@@ -25,7 +25,7 @@ jobs:
       - name: O'yin fayllari
         run: |
           mkdir -p apkbuild/www
-          cp index.html game.js world.js economy.js apkbuild/www/
+          cp -r index.html game.js world.js economy.js icon.png manifest.webmanifest lib apkbuild/www/
           if [ -n "${{ vars.SERVER_URL }}" ]; then sed -i "s#const DEFAULT_SERVER = '';#const DEFAULT_SERVER = '${{ vars.SERVER_URL }}';#" apkbuild/www/game.js; fi
       - name: Capacitor
         working-directory: apkbuild
@@ -36,6 +36,13 @@ jobs:
           npx cap add android
           sed -i 's/<activity/<activity android:screenOrientation="sensorLandscape"/' android/app/src/main/AndroidManifest.xml
           npx cap sync android
+      - name: Ikonka
+        working-directory: apkbuild
+        continue-on-error: true
+        run: |
+          mkdir -p assets && cp ../icon.png assets/icon-only.png && cp ../icon.png assets/icon-foreground.png
+          printf '<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024"><rect width="1024" height="1024" fill="#e8742a"/></svg>' > assets/icon-background.svg
+          npx --yes @capacitor/assets@3 generate --android --iconBackgroundColor '#e8742a' --splashBackgroundColor '#161c33'
       - name: APK yig'ish
         working-directory: apkbuild/android
         run: |
@@ -51,17 +58,60 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
-      - name: Kompyuter dasturi (Electron)
+      - name: O'yin fayllari
         shell: bash
         run: |
-          mkdir -p desk/www && cd desk
-          cp ../index.html ../game.js ../world.js ../economy.js www/
-          if [ -n "${{ vars.SERVER_URL }}" ]; then sed -i "s#const DEFAULT_SERVER = '';#const DEFAULT_SERVER = '${{ vars.SERVER_URL }}';#" www/game.js; fi
-          sed -i 's#<script type="module" src="./game.js"></script>#<script>window.OSH_DESKTOP = true;</script>\n<script type="module" src="./game.js"></script>#' www/index.html
+          mkdir -p desk/www
+          cp -r index.html game.js world.js economy.js icon.png manifest.webmanifest lib desk/www/
+          if [ -n "${{ vars.SERVER_URL }}" ]; then sed -i "s#const DEFAULT_SERVER = '';#const DEFAULT_SERVER = '${{ vars.SERVER_URL }}';#" desk/www/game.js; fi
+          sed -i 's#<script type="module" src="./game.js"></script>#<script>window.OSH_DESKTOP = true;</script>\n<script type="module" src="./game.js"></script>#' desk/www/index.html
+      # 1-usul: Tauri (kichkina .exe, ~10 MB). Windows 10/11 dagi WebView2 ishlatiladi.
+      - name: Kompyuter dasturi (Tauri)
+        id: tauri
+        continue-on-error: true
+        shell: bash
+        working-directory: desk
+        run: |
+          npm init -y > /dev/null
+          npm install --save-dev @tauri-apps/cli@2
+          mkdir -p src-tauri/src
+          cat > src-tauri/Cargo.toml <<'TOML'
+          [package]
+          name = "osh-markazi"
+          version = "1.0.0"
+          edition = "2021"
+          [build-dependencies]
+          tauri-build = { version = "2", features = [] }
+          [dependencies]
+          tauri = { version = "2", features = [] }
+          [profile.release]
+          opt-level = "s"
+          lto = true
+          strip = true
+          codegen-units = 1
+          panic = "abort"
+          TOML
+          echo 'fn main() { tauri_build::build() }' > src-tauri/build.rs
+          printf '#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]\nfn main() { tauri::Builder::default().run(tauri::generate_context!()).expect("xato"); }\n' > src-tauri/src/main.rs
+          cat > src-tauri/tauri.conf.json <<'JSON'
+          { "productName": "Osh markazi", "version": "1.0.0", "identifier": "uz.oshmarkazi.desktop",
+            "build": { "frontendDist": "../www" },
+            "app": { "windows": [{ "title": "Osh markazi", "width": 1280, "height": 800, "center": true }], "security": { "csp": null } },
+            "bundle": { "active": false, "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"] } }
+          JSON
+          npx tauri icon ../icon.png -o src-tauri/icons
+          npx tauri build --no-bundle
+          cp src-tauri/target/release/osh-markazi.exe ../OshMarkazi-Windows.exe
+      # 2-usul (agar Tauri ishlamasa): Electron
+      - name: Kompyuter dasturi (Electron, zaxira)
+        if: steps.tauri.outcome != 'success'
+        shell: bash
+        run: |
+          mkdir -p el && cd el && cp -r ../desk/www www && cp ../icon.png icon.png
           cat > main.cjs <<'JS'
           const { app, BrowserWindow } = require('electron');
           const http = require('http'), fs = require('fs'), path = require('path');
-          const TYPES = { '.html': 'text/html', '.js': 'text/javascript' };
+          const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
           app.whenReady().then(() => {
             const root = path.join(__dirname, 'www');
             const srv = http.createServer((req, res) => {
@@ -69,7 +119,7 @@ jobs:
               if (!f.startsWith(root)) { res.writeHead(403); return res.end(); }
               fs.readFile(f, (e, d) => { if (e) { res.writeHead(404); return res.end(); } res.writeHead(200, { 'Content-Type': TYPES[path.extname(f)] || 'application/octet-stream' }); res.end(d); });
             }).listen(0, '127.0.0.1', () => {
-              const w = new BrowserWindow({ width: 1280, height: 800, autoHideMenuBar: true, title: 'Osh markazi' });
+              const w = new BrowserWindow({ width: 1280, height: 800, autoHideMenuBar: true, title: 'Osh markazi', icon: path.join(__dirname, 'icon.png') });
               w.loadURL('http://127.0.0.1:' + srv.address().port + '/');
             });
           });
@@ -77,8 +127,9 @@ jobs:
           JS
           cat > package.json <<'JSON'
           { "name": "osh-markazi", "version": "1.0.0", "main": "main.cjs", "description": "Osh markazi", "author": "Osh markazi",
-            "build": { "appId": "uz.oshmarkazi.desktop", "productName": "Osh markazi", "files": ["main.cjs", "www/**"],
-                       "win": { "target": "portable" }, "artifactName": "OshMarkazi-Windows.exe" } }
+            "build": { "appId": "uz.oshmarkazi.desktop", "productName": "Osh markazi", "files": ["main.cjs", "icon.png", "www/**"],
+                       "electronLanguages": ["en-US"], "compression": "maximum",
+                       "win": { "target": "portable", "icon": "icon.png" }, "artifactName": "OshMarkazi-Windows.exe" } }
           JSON
           npm install --save-dev electron@31 electron-builder@24
           CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --win portable --x64 --publish never
@@ -93,7 +144,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Sahifa fayllari
         run: |
-          mkdir -p site && cp index.html game.js world.js economy.js site/ && touch site/.nojekyll
+          mkdir -p site && cp -r index.html game.js world.js economy.js icon.png manifest.webmanifest lib site/ && touch site/.nojekyll
           if [ -n "${{ vars.SERVER_URL }}" ]; then sed -i "s#const DEFAULT_SERVER = '';#const DEFAULT_SERVER = '${{ vars.SERVER_URL }}';#" site/game.js; fi
       - uses: peaceiris/actions-gh-pages@v4
         with:
@@ -114,7 +165,8 @@ jobs:
           make_latest: true
           body: |
             Telefon (Android): OshMarkazi.apk
-            Kompyuter (Windows): OshMarkazi-Windows.exe — yuklab olib ishga tushiring, o'rnatish shart emas.
+            Kompyuter (Windows 10/11): OshMarkazi-Windows.exe — yuklab olib ishga tushiring, o'rnatish shart emas.
+            Brauzerda: https://abduvahobb.github.io/My_Plov/
           files: |
             out/OshMarkazi.apk
             out/OshMarkazi-Windows.exe
