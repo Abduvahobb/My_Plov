@@ -75,13 +75,7 @@ const HIP_Y = 0.9 * SC;
 const SEAT_H = 0.47;                     // stul o'rindig'i balandligi
 export const SIT = { thigh: -1.5, knee: 1.45 };
 const MATS = {};
-const mat = (c) => MATS[c] || (MATS[c] = new THREE.MeshStandardMaterial({ color: c, roughness: 0.55, metalness: 0 }));
-const doppiTex = (() => {                // o'zbek do'ppisi naqshi
-  const c = document.createElement('canvas'); c.width = 128; c.height = 32; const g = c.getContext('2d');
-  g.fillStyle = '#111'; g.fillRect(0, 0, 128, 32); g.fillStyle = '#f2f2f2';
-  for (let i = 0; i < 4; i++) { const x = 16 + i * 32; g.beginPath(); g.moveTo(x, 6); g.quadraticCurveTo(x + 9, 16, x, 27); g.quadraticCurveTo(x - 9, 16, x, 6); g.fill(); }
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
-})();
+const mat = (c) => MATS[c] || (MATS[c] = new THREE.MeshLambertMaterial({ color: c }));
 const GEO = {
   pelvis: new THREE.SphereGeometry(0.2, 18, 12).scale(1.1, 0.72, 0.85),
   torso: new THREE.CapsuleGeometry(0.22, 0.3, 6, 18).scale(1.08, 1, 0.78).translate(0, 0.36, 0),
@@ -95,8 +89,10 @@ const GEO = {
   hair: new THREE.SphereGeometry(0.222, 22, 14, 0, Math.PI * 2, 0, Math.PI * 0.5),
   hairBack: new THREE.SphereGeometry(0.222, 22, 14, Math.PI * 0.75, Math.PI * 1.5, Math.PI * 0.45, Math.PI * 0.25),
   longHair: new THREE.CapsuleGeometry(0.13, 0.3, 4, 12).scale(1.3, 1, 0.6),
-  doppi: new THREE.CylinderGeometry(0.155, 0.19, 0.11, 4, 1, true).rotateY(Math.PI / 4),
-  doppiTop: new THREE.CylinderGeometry(0.155, 0.155, 0.01, 4).rotateY(Math.PI / 4),
+  doppi: new THREE.CylinderGeometry(0.192, 0.207, 0.1, 28, 1, true),                               // do'ppi yon tomoni
+  doppiTop: new THREE.SphereGeometry(0.192, 28, 8, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.32, 1),
+  doppiBand: new THREE.TorusGeometry(0.207, 0.016, 8, 28).rotateX(Math.PI / 2),
+  doppiDot: new THREE.SphereGeometry(0.035, 10, 8).scale(1, 1.6, 0.5),
   scarf: new THREE.SphereGeometry(0.235, 22, 16, 0, Math.PI * 2, 0, Math.PI * 0.6),
   scarfBack: new THREE.ConeGeometry(0.22, 0.42, 18, 1, true),
   glasses: new THREE.BoxGeometry(0.26, 0.06, 0.02),
@@ -158,11 +154,18 @@ class Character {
       M(GEO.hairBack, L.hair, this.head);
       if (gender === 'f') M(GEO.longHair, L.hair, this.head, 0, -0.25, -0.12);
       if (L.hat === 'doppi') {
-        M(GEO.doppi, new THREE.MeshStandardMaterial({ map: doppiTex, roughness: 0.7 }), this.head, 0, 0.19, -0.01);
-        M(GEO.doppiTop, 0x111111, this.head, 0, 0.245, -0.01);
+        M(GEO.doppi, 0x161616, this.head, 0, 0.115, -0.01);
+        M(GEO.doppiTop, 0x161616, this.head, 0, 0.165, -0.01);
+        M(GEO.doppiBand, 0xf2f2f2, this.head, 0, 0.068, -0.01);
+        for (let i = 0; i < 4; i++) {                    // qalampir naqshi — yon tomonlarda
+          const a = i * Math.PI / 2 + Math.PI / 4;
+          const d = M(GEO.doppiDot, 0xf2f2f2, this.head, Math.sin(a) * 0.2, 0.118, Math.cos(a) * 0.2 - 0.01); d.rotation.set(0, a, 0.5);
+        }
       }
     }
     if (L.glasses) M(GEO.glasses, 0x0a0a0a, this.head, 0, 0.03, 0.215);
+    // har bir bo'g'imdagi bo'laklarni bittaga birlashtirish: 30 ta bo'lak o'rniga 11 ta (telefonda tez)
+    for (const grp of [this.hips, this.torso, this.head, ...this.legs.flatMap((l) => [l.leg, l.knee]), ...this.arms.flatMap((a) => [a.sh, a.el])]) W.mergeChildrenVC(grp);
     if (name) { this.label = W.makeLabel(name, { dot }); this.label.position.y = 2.1; this.root.add(this.label); }
     if (tag) { this.tag = W.makeLabel(tag, { bg: 'rgba(46,139,87,0.9)', color: '#fff', scale: 0.8 }); this.tag.position.y = 2.05; this.root.add(this.tag); }
     this.anim = 0; this.sit = false; this.mv = 0; this.rn = 0; this.ph = Math.random() * 6; this.t = Math.random() * 10;
@@ -212,7 +215,7 @@ const sitRootY = () => SEAT_H + 0.06 - HIP_Y;
 // =====================================================================
 const G = {
   mode: 'start', online: false, myId: null, name: '', money: 0,
-  kitchens: {}, mine: [], hostOf: new Set(), views: {}, plotKid: new Array(W.PLOTS.length).fill(null),
+  kitchens: {}, mine: [], hostOf: new Set(), hosted: new Set(), views: {}, plotKid: new Array(W.PLOTS.length).fill(null),
   remotes: new Map(), tut: +(localStorage.osh_tut || 0), event: null,
 };
 const P = { ch: null, pos: new THREE.Vector3(), head: 0, vy: 0, y: 0, room: -1, floor: 1, run: false, seat: null, sendT: 0, drive: null, order: null, cargo: 0 };
@@ -307,7 +310,7 @@ class KView {
   get room() { return getInterior(this.k.plot); }
   makeEnt(id, kind, tint) {
     const e = { id, kind, x: 0, y: 0, fy: 0, z: 0, ry: 0, anim: 0, room: -1, path: [], state: '', pat: 1, tint, tx: 0, ty: 0, tz: 0 };
-    if (kind === 'v') { e.mesh = W.makeCar(tint, {}); scene.add(e.mesh); }
+    if (kind === 'v') { e.mesh = W.makeCar(tint, {}); if (e.mesh.userData.beam) e.mesh.userData.beam.visible = !!nightCars; scene.add(e.mesh); }
     else e.ch = new Character({ tint, tag: kind === 'w1' ? 'Oshpaz' : kind === 'w2' ? 'Ofitsiant' : null, look: kind === 'w1' ? { shirt: 0xffffff, hat: 'doppi' } : kind === 'w2' ? { shirt: 0xffffff, pants: 0x1c1c1c } : {}, gender: kind === 'w1' || kind === 'w2' ? 'm' : undefined });
     this.ents.set(id, e); return e;
   }
@@ -380,7 +383,25 @@ function stepPathY(e, dt, speed) {
 
 // ---- host simulyatsiyasi: mijozlar uydan yoki mashinadan kelib, o'tirib, ovqatlanib ketadi ----
 class Sim {
-  constructor(v) { this.v = v; this.spawnT = 3; this.sendT = 0; this.rateT = 0; this.toyT = 0; }
+  // ghost = egasi o'yinda yo'q paytda mehmon ko'radigan "jonli" oshxona (pulga ta'sir qilmaydi)
+  constructor(v, ghost = false) { this.v = v; this.ghost = ghost; this.spawnT = ghost ? 0.5 : 3; this.sendT = 0; this.rateT = 0; this.toyT = 0; if (ghost) v.portions = 99; }
+  // boshqa o'yinchidan boshqaruv o'tganda: o'tirgan mijozlar joyida qoladi
+  adopt() {
+    const v = this.v;
+    if (typeof v.k.ready === 'number') v.portions = v.k.ready;
+    for (const e of [...v.ents.values()]) {
+      if (e.kind === 'v' || (e.kind === 'c' && 'oh'.includes(e.state))) { v.dropEnt(e); continue; }
+      e.x = e.tx ?? e.x; e.z = e.tz ?? e.z; e.path = [];
+      if (e.kind === 'c' && e.ti !== undefined) {
+        const sw = this.seatWorld(e.ti, e.si);
+        if (e.state === 'g') { e.path = [...route({ x: e.x, z: e.z }, v.plot.approach), v.plot.approach, v.plot.door]; continue; }
+        if (e.state === 'i') e.state = 'w';
+        e.x = sw.x; e.z = sw.z; e.ry = sw.ry; e.fy = sw.y; e.anim = 3;
+        e.patMax = E.patienceFor(v.k); e.pat = Math.max(0.3, e.pat || 1); e.eatT = 6;
+      } else if (e.kind === 'w1' || e.kind === 'w2') { e.state = 'i'; e.fy = 0; }
+      else v.dropEnt(e);
+    }
+  }
   seatWorld(ti, si) { return this.v.room.seatW(ti, si); }
   freeSeat(kinds = ['hall', 'vip']) {
     const vis = W.visibleTables(this.v.k), free = [];
@@ -395,14 +416,14 @@ class Sim {
     const id = 'c' + (++v.seq) + Math.random().toString(36).slice(2, 5);
     const tint = CLOTHES[(Math.random() * CLOTHES.length) | 0];
     const p = v.plot;
-    if (Math.random() < 0.45) {                         // mashinada keladi
+    if (Math.random() < 0.55) {                         // mashinada keladi
       const car = v.makeEnt('v' + id, 'v', [0xe9e9ec, 0x1f1f22, 0xb22234, 0x2e5f9e, 0xc9c9c9][(Math.random() * 5) | 0]);
-      car.carDir = p.carDir; car.s = clamp(p.curb.x - p.carDir * 110, -W.HALF + 6, W.HALF - 6);
+      car.carDir = p.carDir; car.s = clamp(p.curb.x - p.carDir * 70, -W.HALF + 6, W.HALF - 6);
       car.x = car.s; car.z = p.curb.z; car.ry = car.carDir > 0 ? 0 : Math.PI; car.state = 'd';
       car.passenger = { id, tint, seat, guest };
       if (car.mesh) car.mesh.rotation.y = car.ry;
     } else {                                            // uyidan piyoda chiqib keladi
-      const h = nearHouses(p.approach)[(Math.random() * 18) | 0];
+      const h = nearHouses(p.approach, 8)[(Math.random() * 8) | 0];      // yaqin uylardan
       const e = v.makeEnt(id, 'c', tint);
       e.x = h.door.x; e.z = h.door.z; e.ti = seat[0]; e.si = seat[1]; e.state = 'g'; e.guest = guest;
       e.path = [h.gate, h.out, ...route(h.out, p.approach), p.approach, p.door];
@@ -412,15 +433,18 @@ class Sim {
   serve(e) {
     const v = this.v;
     if (!e || e.state !== 'w' || v.portions <= 0) return false;
-    v.portions--; e.state = 'e'; e.eatT = 10; e.pat = 1;
+    if (!this.ghost) v.portions--;
+    e.state = 'e'; e.eatT = 10; e.pat = 1;
+    if (G.online && !this.ghost) net.send({ t: 'serve', kid: v.kid, vip: this.seatWorld(e.ti, e.si).kind === 'vip', guest: !!e.guest });
+    sfx.plate();
     return true;
   }
   startCook(byWorker = false) {                       // masalliq bo'lsa pishiradi
-    const v = this.v, k = v.k; if (v.cook > 0) return 'busy';
+    const v = this.v, k = v.k; if (v.cook > 0 || this.ghost) return 'busy';
     const n = Math.min(E.QOZON_CAP[k.up.qozon - 1], Math.floor(k.stock));
     if (n <= 0) return 'nostock';
     k.stock -= n;
-    if (G.online) net.send({ t: 'use', kid: v.kid, n }); else saveOffline();
+    if (G.online) net.send({ t: 'cook', kid: v.kid }); else saveOffline();
     v.cookN = n; v.cookTotal = E.cookTimeFor(k, byWorker); v.cook = v.cookTotal; return 'ok';
   }
   startToy(order) {                                   // banket zalida to'y
@@ -429,20 +453,30 @@ class Sim {
     this.toyT = 0; return true;
   }
   load(n) {                                           // Damasga yuklash
-    const v = this.v; if (v.portions < n) return false;
-    v.portions -= n; return true;
+    const v = this.v; if (v.portions < n || this.ghost) return false;
+    v.portions -= n;
+    if (G.online) net.send({ t: 'load', kid: v.kid, n });
+    return true;
   }
   leave(e, paid) {
     const v = this.v, sw = this.seatWorld(e.ti, e.si);
-    if (paid) {
+    if (this.ghost) { /* mehmon ko'rinishi: pul va reyting o'zgarmaydi */ }
+    else if (paid) {
       const amt = Math.round(E.priceFor(v.k, sw.kind === 'vip') * (e.guest ? 1.5 : 1));
-      earn(v.kid, amt, new THREE.Vector3(e.x, e.y, e.z));
+      earn(v.kid, amt, new THREE.Vector3(e.x, e.y, e.z), 'cust');
       v.rating = Math.min(5, v.rating + 0.03);
     } else {
       v.rating = Math.max(1, v.rating - 0.15);
       e.ch.bubble('Juda uzoq kutdim!', 3);
     }
-    if (e.guest && v.toy) { v.toy.done++; if (v.toy.done >= v.toy.total) { earn(v.kid, v.toy.bonus, v.room.doorIn.clone()); toast(`To'y tugadi! Bonus: ${fmt(v.toy.bonus)}`); v.toy = null; } }
+    if (!this.ghost && e.guest && v.toy) {
+      v.toy.done++;
+      if (v.toy.done >= v.toy.total) {
+        earn(v.kid, v.toy.bonus, v.room.doorIn.clone(), 'toy');
+        if (G.online) net.send({ t: 'toy_done', kid: v.kid });                       // bonusni server o'zi hisoblaydi
+        toast(`To'y tugadi! Bonus: ${fmt(v.toy.bonus)}`); v.toy = null;
+      }
+    }
     e.state = 'o'; e.anim = 1;
     e.path = W.reversePath([PT(v.room.doorIn), ...sw.path, { x: sw.x, z: sw.z, y: sw.y }]).slice(1);
   }
@@ -456,6 +490,10 @@ class Sim {
     const v = this.v, k = v.k, room = v.room, p = v.plot;
     // pishirish
     if (v.cook > 0) { v.cook -= dt; if (v.cook <= 0) { v.cook = 0; v.portions += v.cookN || 0; } }
+    if (this.ghost) {                                   // mehmon ko'rinishi: ovqat doim bor, o'zi tarqatiladi
+      v.portions = 99;
+      for (const e of v.ents.values()) if (e.kind === 'c' && e.state === 'w') { e.autoT = (e.autoT || rnd(2, 5)) - dt; if (e.autoT <= 0) this.serve(e); }
+    }
     // ishchilar (ishchilar xonasi bo'lsa tezroq)
     const fast = E.hasRoom(k, 'ishchi') ? 1.3 : 1;
     const chef = this.worker('w1', k.workers.oshpaz, room.qozon);
@@ -480,6 +518,7 @@ class Sim {
     }
     // yangi mijozlar (sheriklar va bayram ko'proq mijoz olib keladi)
     const owners = Math.max(1, k.names.length);
+    if (v.portions > 0 && ![...v.ents.values()].some((e) => e.kind === 'c' || e.kind === 'v')) this.spawnT = Math.min(this.spawnT, 1.5);   // ovqat tayyor, mijoz yo'q — tez keladi
     this.spawnT -= dt * (1 + 0.5 * (owners - 1)) * (G.event?.mul || 1);
     if (this.spawnT <= 0) { this.spawnT = E.SPAWN_EVERY[k.up.reklama - 1] * rnd(0.8, 1.25); this.spawn(false); }
     if (v.toy && v.toy.left > 0) { this.toyT -= dt; if (this.toyT <= 0) { this.toyT = 1.6; if (this.spawn(true)) v.toy.left--; } }
@@ -488,6 +527,7 @@ class Sim {
       if (e.kind === 'v') this.updCar(e, dt);
       else if (e.kind === 'c') this.updCust(e, dt, room, p);
     }
+    if (this.ghost) return;
     this.sendT -= dt;
     if (G.online && this.sendT <= 0) { this.sendT = 0.2; net.send({ t: 'ks', kid: v.kid, s: v.snapshot() }); }
     this.rateT -= dt;
@@ -495,9 +535,11 @@ class Sim {
   }
   updCar(c, dt) {
     const v = this.v, p = v.plot;
+    const stop = c.state !== 's' && blockedAhead(c.s, p.curb.z, c.carDir, 0, c.mesh);
+    c.vel = (c.vel ?? 10) + ((stop ? 0 : 1) * 12 - (c.vel ?? 10)) * Math.min(1, dt * (stop ? 8 : 2));
     if (c.state === 'd') {                                    // to'xtash joyiga kelyapti
       const left = (p.curb.x - c.s) * c.carDir;
-      const sp = clamp(left * 0.9, 2, 12);
+      const sp = Math.min(clamp(left * 0.9, 2, 12), c.vel);
       c.s += c.carDir * sp * dt;
       if (left <= 0.3) {
         c.state = 's'; c.wait = 2.2;
@@ -507,7 +549,7 @@ class Sim {
         e.path = [{ x: c.s, z: side }, p.approach, p.door];
       }
     } else if (c.state === 's') { c.wait -= dt; if (c.wait <= 0) c.state = 'l'; }
-    else if (c.state === 'l') { c.s += c.carDir * 11 * dt; if (Math.abs(c.s) > W.HALF - 4) { v.dropEnt(c); return; } }
+    else if (c.state === 'l') { c.s += c.carDir * Math.min(11, c.vel) * dt; if (Math.abs(c.s) > W.HALF - 4) { v.dropEnt(c); return; } }
     c.x = c.s; c.z = p.curb.z; c.ry = c.carDir > 0 ? 0 : Math.PI;
   }
   updCust(e, dt, room, p) {
@@ -515,7 +557,7 @@ class Sim {
     switch (e.state) {
       case 'g': {                                             // oshxonaga kelyapti (ko'chada)
         e.anim = 1;
-        if (stepPath(e, dt, 1.9)) {
+        if (stepPath(e, dt, 2.4)) {
           e.room = v.k.plot; e.x = room.doorIn.x; e.z = room.doorIn.z; e.fy = 0;
           const sw = this.seatWorld(e.ti, e.si);
           e.path = [...sw.path, { x: sw.x, z: sw.z, y: sw.y }]; e.state = 'i';
@@ -524,7 +566,7 @@ class Sim {
       }
       case 'i':                                               // ichkarida joyiga boryapti
         e.anim = 1;
-        if (stepPathY(e, dt, 1.7)) {
+        if (stepPathY(e, dt, 2.0)) {
           const sw = this.seatWorld(e.ti, e.si);
           e.state = 'w'; e.anim = 3; e.ry = sw.ry; e.fy = sw.y; e.patMax = E.patienceFor(v.k) * (e.guest ? 2.5 : 1); e.pat = 1;
         }
@@ -537,34 +579,43 @@ class Sim {
         e.eatT -= dt; if (e.eatT <= 0) this.leave(e, true);
         break;
       case 'o':                                               // eshikka chiqib ketyapti
-        if (stepPathY(e, dt, 1.7)) {
+        if (stepPathY(e, dt, 2.0)) {
           e.room = -1; e.x = p.door.x; e.z = p.door.z + p.f * 0.6; e.fy = 0;
-          const h = nearHouses(p.approach)[(Math.random() * 18) | 0];
+          const h = nearHouses(p.approach, 8)[(Math.random() * 8) | 0];
           e.path = [p.approach, ...route(p.approach, h.out), h.out, h.gate, h.door]; e.state = 'h';
         }
         break;
       case 'h':                                               // uyiga qaytyapti
         e.anim = 1;
-        if (stepPath(e, dt, 1.9)) v.dropEnt(e);
+        if (stepPath(e, dt, 2.4)) v.dropEnt(e);
         break;
     }
   }
 }
 function playerOnSeat(v, ti, si) { return P.seat && P.seat.kid === v.kid && P.seat.ti === ti && P.seat.si === si; }
 
-function earn(kid, amt, pos, reason = null) {
+function earn(kid, amt, pos, reason = 'cust') {
   floatText('+' + fmt(amt), pos);
   if (pos.distanceTo(P.pos) < 25) sfx.coin();
-  if (G.online) net.send({ t: 'earn', kid, amt, reason });
+  if (G.online) { if (reason === 'cust') net.send({ t: 'earn', kid }); }       // summani server o'zi hisoblaydi
   else { G.money += amt; const k = G.kitchens[kid]; if (k) k.earned = (k.earned || 0) + amt; saveOffline(); }
 }
 
 function ensureView(kid) {
   if (!G.views[kid]) G.views[kid] = new KView(kid);
   const v = G.views[kid];
-  if (G.hostOf.has(kid) && !v.sim) { v.clear(); v.sim = new Sim(v); }
-  if (!G.hostOf.has(kid) && v.sim) { v.sim = null; }
+  if (G.hostOf.has(kid) && (!v.sim || v.sim.ghost)) { if (v.sim?.ghost) v.clear(); v.sim = new Sim(v); v.sim.adopt(); }
+  if (!G.hostOf.has(kid) && v.sim && !v.sim.ghost) { v.sim = null; }
   return v;
+}
+// egasi o'yinda bo'lmagan oshxonaga kirganda — "jonli" mehmon ko'rinishi
+function updateGhosts() {
+  if (!G.online) return;
+  for (const v of Object.values(G.views)) {
+    const want = !G.hosted.has(v.kid) && P.room === v.k.plot;
+    if (want && !v.sim) { v.clear(); v.sim = new Sim(v, true); }
+    if (!want && v.sim?.ghost) { v.sim = null; v.clear(); }
+  }
 }
 function setKitchen(k) {
   E.fixKitchen(k);
@@ -589,10 +640,11 @@ function spawnTraffic(n) {
 function updateTraffic(dt) {
   for (const c of traffic) {
     const X = (s) => (c.axis === 'x' ? s : c.line - W.LANE_OFF * c.dir), Z = (s) => (c.axis === 'x' ? c.line + W.LANE_OFF * c.dir : s);
-    // o'yinchi oldida bo'lsa to'xtaydi
-    const ax = X(c.s + c.dir * 4), az = Z(c.s + c.dir * 4);
-    const block = P.room < 0 && Math.hypot(P.pos.x - ax, P.pos.z - az) < 3.2;
-    const sp = block ? 0 : c.sp;
+    // oldida odam, mashina yoki o'yinchi bo'lsa sekinlashib to'xtaydi
+    const dx = c.axis === 'x' ? c.dir : 0, dz = c.axis === 'x' ? 0 : c.dir;
+    const block = blockedAhead(X(c.s), Z(c.s), dx, dz, c.mesh);
+    c.v = (c.v ?? c.sp) + ((block ? 0 : c.sp) - (c.v ?? c.sp)) * Math.min(1, dt * (block ? 9 : 1.5));
+    const sp = c.v;
     if (!c.plan) {
       const ahead = W.LINES.filter((m) => (m - c.s) * c.dir > 1).sort((a, b) => (a - b) * c.dir)[0];
       if (ahead !== undefined && Math.abs(ahead - c.s) < 14) {
@@ -617,6 +669,27 @@ function updateTraffic(dt) {
     const target = c.axis === 'x' ? (c.dir > 0 ? 0 : Math.PI) : (c.dir > 0 ? -Math.PI / 2 : Math.PI / 2);
     c.ry = lerpAngle(c.ry, target, Math.min(1, dt * 6)); c.mesh.rotation.y = c.ry;
   }
+}
+// to'siqlar ro'yxati (har kadrda yangilanadi): odamlar, mashinalar, o'yinchilar
+const OBST = [];
+function buildObstacles() {
+  OBST.length = 0;
+  const add = (x, z, r, o) => OBST.push({ x, z, r, o });
+  if (P.room < 0 && G.mode === 'play') add(P.pos.x, P.pos.z, P.drive ? 2.0 : 0.6, P.drive ? P.drive.pv.damas : null);
+  for (const r of G.remotes.values()) if (r.room < 0) add(r.x, r.z, r.anim === 4 ? 2.0 : 0.6, r.car || null);
+  for (const e of peds) add(e.x, e.z, 0.6, null);
+  for (const v of Object.values(G.views)) for (const e of v.ents.values()) if (e.room < 0) add(e.x, e.z, e.kind === 'v' ? 2.0 : 0.6, e.mesh || null);
+  for (const c of traffic) add(c.mesh.position.x, c.mesh.position.z, 2.0, c.mesh);
+  for (const pv of world.plotViews) if (pv.damas && !(P.drive && P.drive.pv === pv)) add(pv.damas.position.x, pv.damas.position.z, 2.0, pv.damas);
+}
+function blockedAhead(x, z, dx, dz, self) {
+  for (const o of OBST) {
+    if (o.o === self) continue;
+    const rx = o.x - x, rz = o.z - z, fwd = rx * dx + rz * dz;
+    if (fwd < 0.5 || fwd > 7.5) continue;
+    if (Math.abs(rx * dz - rz * dx) < 1.0 + o.r * 0.6) return true;
+  }
+  return false;
 }
 const peds = [];
 function spawnPeds(n) {
@@ -651,7 +724,7 @@ addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (e.code === 'KeyE') doAction();
   if (e.code === 'Space') jump();
-  if (e.code === 'Enter') { $('chatIn').focus(); e.preventDefault(); }
+  if (e.code === 'Enter') { $('chatWrap').classList.add('open'); $('chatIn').focus(); e.preventDefault(); }
   if (e.code === 'KeyM' || e.code === 'Tab') { e.preventDefault(); toggleMenu(); }
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
@@ -687,6 +760,11 @@ $('jumpBtn').onclick = () => jump();
 $('actBtn').onclick = () => doAction();
 $('bossBtn').onclick = () => toggleMenu();
 $('chatBtn').onclick = () => sendChat();
+$('chatToggle').onclick = () => {
+  const w = $('chatWrap'), open = !w.classList.contains('open'); w.classList.toggle('open', open);
+  [...$('chatLog').children].forEach((d) => d.classList.remove('old'));
+  if (open) $('chatIn').focus(); else $('chatIn').blur();
+};
 function jump() { if (G.mode === 'play' && P.y <= 0.001 && !P.seat) P.vy = 5.2; }
 
 // =====================================================================
@@ -782,6 +860,10 @@ function updateDrive(dt) {
   D.yaw -= ix * dt * 1.9 * clamp(D.speed / 5, -1, 1);
   const pos = new THREE.Vector3(d.position.x + Math.cos(D.yaw) * D.speed * dt, 0, d.position.z - Math.sin(D.yaw) * D.speed * dt);
   if (collide(pos, 1.5, world.colliders)) D.speed *= 0.4;
+  for (const c of traffic) {                         // boshqa mashinalarga urilish
+    const cx = c.mesh.position.x, cz = c.mesh.position.z, dd = Math.hypot(pos.x - cx, pos.z - cz);
+    if (dd < 3.4) { const k = (3.4 - dd) / (dd || 1); pos.x += (pos.x - cx) * k; pos.z += (pos.z - cz) * k; if (Math.abs(D.speed) > 4) sfx.bump(); D.speed *= -0.25; }
+  }
   d.position.copy(pos); d.rotation.y = D.yaw;
   P.pos.copy(pos);
   // kamera mashina orqasidan yuradi
@@ -871,8 +953,9 @@ function fadeThen(fn) {
 function enterRoom(plot) {
   fadeThen(() => {
     const room = getInterior(plot);
-    P.room = plot; P.floor = 1; P.pos.set(room.doorIn.x, 0, room.doorIn.z - 0.6); P.head = Math.PI;
-    camYaw = 0; camDist = 4.2;
+    P.room = plot; P.floor = 1; P.pos.set(room.doorIn.x, 0, room.doorIn.z - 2.6); P.head = Math.PI;
+    camYaw = 0; camDist = 4.4; camPitch = 0.22;
+    sfx.door();
     if (G.tut < 1 && isMine(G.plotKid[plot])) setTut(1);
   });
 }
@@ -880,7 +963,8 @@ function exitRoom() {
   fadeThen(() => {
     const p = W.PLOTS[P.room];
     P.room = -1; P.floor = 1; P.pos.set(p.door.x, 0, p.door.z + p.f * 1.6); P.head = p.f > 0 ? 0 : Math.PI;
-    camYaw = p.f > 0 ? 0 : Math.PI; camDist = 5.5;
+    camYaw = p.f > 0 ? 0 : Math.PI; camDist = 5.5; camPitch = 0.3;
+    sfx.doorClose();
   });
 }
 
@@ -891,18 +975,25 @@ orderBeacon.visible = false; scene.add(orderBeacon);
 let orderT = 70;
 function offerOrder() {
   const kid = G.mine[0], k = G.kitchens[kid]; if (!k || P.order) return;
+  if (G.online) { net.send({ t: 'order_req', kid }); return; }          // onlayn: buyurtmani server beradi
   const o = E.weddingOrder(k);
   const hall = (k.up.qavat || 1) >= 3 && Math.random() < 0.5;
-  const order = hall ? { kind: 'zal', kid, ...o, reward: o.reward * 1.5 } : { kind: 'yetkazish', kid, ...o };
+  showOrder(hall ? { kind: 'zal', kid, ...o, reward: o.reward * 1.5 } : { kind: 'yetkazish', kid, ...o });
+}
+function showOrder(order) {
+  const k = G.kitchens[order.kid]; if (!k) return;
+  const hall = order.kind === 'zal';
+  sfx.ding();
   const txt = hall
     ? `To'y buyurtmasi: banket zalingizda ${E.WEDDING_GUESTS} mehmon. Bonus: ${fmt(order.reward)}`
     : `To'y buyurtmasi: ${order.n} porsiya ${E.BUSINESS[k.type].dish.toLowerCase()}ni Damasda to'yxonaga yetkazing. Mukofot: ${fmt(order.reward)}`;
   toast(txt, [{ t: 'Qabul qilish', fn: () => acceptOrder(order) }, { t: 'Keyinroq', no: true }], 15);
 }
 function acceptOrder(o) {
+  if (G.online) net.send({ t: 'order_acc', id: o.id });
   if (o.kind === 'zal') {
     const v = G.views[o.kid];
-    if (v?.sim) v.sim.startToy(o); else net.send({ t: 'act', kid: o.kid, act: 'toy', cid: o.reward });
+    if (!G.online && v?.sim) v.sim.startToy(o);                  // onlayn: server hostga o'zi yuboradi
     toast("Mehmonlar kelyapti! Banket zalida (3-qavat) ularga ovqat bering.");
     return;
   }
@@ -920,6 +1011,7 @@ function loadOrder(v) {
 function deliverOrder() {
   const o = P.order; if (!o) return;
   earn(o.kid, o.reward, P.pos.clone(), 'toy');
+  if (G.online) net.send({ t: 'order_done', id: o.id });
   toast(`To'y egalari xursand! +${fmt(o.reward)}`);
   P.order = null; P.cargo = 0;
 }
@@ -933,19 +1025,51 @@ function updateCamera(dt) {
   const ty = P.drive ? 1.8 : by + (P.seat ? 0.9 : P.y) + 1.55;
   camTarget.lerp(new THREE.Vector3(P.pos.x, ty, P.pos.z), Math.min(1, dt * 12));
   if (Math.abs(camTarget.y - ty) > 3) camTarget.y = ty;                  // qavat almashganda
+  if (Math.hypot(camTarget.x - P.pos.x, camTarget.z - P.pos.z) > 10) camTarget.set(P.pos.x, ty, P.pos.z);   // xonaga kirganda / chiqqanda
   const d = inside ? Math.min(camDist, 4.6) : camDist;
   const pos = new THREE.Vector3(
     camTarget.x + Math.sin(camYaw) * Math.cos(camPitch) * d,
     camTarget.y + Math.sin(camPitch) * d,
     camTarget.z + Math.cos(camYaw) * Math.cos(camPitch) * d);
-  if (inside) {
+  if (inside) {                     // devorga tegsa kamera nur bo'ylab yaqinlashadi (pastga qaramaydi)
     const b = getInterior(P.room).bounds(P.floor, P.pos.x);
+    let t = 1;
+    for (const [a, lo, hi] of [['x', b.x0, b.x1], ['y', b.y0, b.y1], ['z', b.z0, b.z1]]) {
+      const o = camTarget[a], dd = pos[a] - o;
+      if (dd > 1e-4 && o + dd > hi) t = Math.min(t, (hi - o) / dd);
+      if (dd < -1e-4 && o + dd < lo) t = Math.min(t, (lo - o) / dd);
+    }
+    t = Math.max(0.12, t);
+    pos.lerpVectors(camTarget, pos, t);
     pos.x = clamp(pos.x, b.x0, b.x1); pos.z = clamp(pos.z, b.z0, b.z1); pos.y = clamp(pos.y, b.y0, b.y1);
   } else pos.y = Math.max(0.5, pos.y);
   camera.position.copy(pos); camera.lookAt(camTarget);
 }
 
-// yorug'lik: ichkarida issiq chiroq, tashqarida oy nuri
+// ---- kun va tun (hamma o'yinchida bir xil: 20 daqiqalik sikl) ----
+const DAYLEN = 1200;
+const SKY_DAY = new THREE.Color(0xd6ecff), SKY_NIGHT = new THREE.Color(0x1a2142), SKY_DUSK = new THREE.Color(0xf0a070);
+let dayK = 1, duskK = 0, nightCars = null;
+function dayPhase() {
+  const q = new URLSearchParams(location.search).get('time');
+  if (q === 'night') return 0.8; if (q === 'dusk') return 0.635; if (q === 'day') return 0.3;
+  return ((Date.now() / 1000) % DAYLEN) / DAYLEN;
+}
+function updateDay() {
+  const p = dayPhase();
+  let d;
+  if (p < 0.6) d = 1; else if (p < 0.67) d = 1 - (p - 0.6) / 0.07; else if (p < 0.93) d = 0; else d = (p - 0.93) / 0.07;
+  d = d * d * (3 - 2 * d);
+  dayK = d; duskK = Math.max(0, 1 - Math.abs(d - 0.5) * 2);
+  world.setTime(d, duskK);
+  scene.fog.color.copy(SKY_NIGHT).lerp(SKY_DAY, d).lerp(SKY_DUSK, duskK * 0.4);
+  const night = d < 0.45;
+  if (night !== nightCars) {
+    nightCars = night;
+    for (const c of traffic) if (c.mesh.userData.beam) c.mesh.userData.beam.visible = night;
+  }
+}
+// yorug'lik: ichkarida issiq chiroq, tashqarida quyosh / oy
 function updateLights(t) {
   const inside = (G.mode === 'play' ? P.room : -1) >= 0;
   const focus = G.mode === 'intro' ? camTarget : P.pos;
@@ -964,7 +1088,9 @@ function updateLights(t) {
       q.osh.visible = !!v && v.portions > 0;
     });
   } else {
-    moon.intensity = 2.2; hemi.intensity = 1.6; roomLight.intensity = 0; fireLight.intensity = 0;
+    moon.intensity = 0.35 + 1.85 * dayK; hemi.intensity = 0.55 + 1.05 * dayK; roomLight.intensity = 0; fireLight.intensity = 0;
+    moon.color.setRGB(1, 0.96 - 0.25 * duskK, 0.88 - 0.4 * duskK).lerp(new THREE.Color(0x9ab4ff), 1 - dayK);
+    hemi.color.setRGB(1, 1, 1).lerp(new THREE.Color(0x6f80c0), 1 - dayK);
   }
 }
 
@@ -987,9 +1113,10 @@ function connect(url) {
     const fin = (v) => { if (!done) { done = true; res(v); } };
     let ws; try { ws = new WebSocket(url); } catch { return res(false); }
     const to = setTimeout(() => { try { ws.close(); } catch { } fin(false); }, 4000);
-    ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', name: G.name, look: myLook, token: localStorage.osh_token || null }));
+    ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', name: G.name, pin: G.pin || null, look: myLook, token: localStorage.osh_token || null }));
     ws.onmessage = (ev) => {
       const m = JSON.parse(ev.data);
+      if (m.t === 'auth' && !done) { clearTimeout(to); G.authErr = m.msg; fin(false); return; }
       if (m.t === 'welcome' && !done) { clearTimeout(to); net.ws = ws; onWelcome(m); fin(true); }
       else if (done) onMsg(m);
     };
@@ -998,11 +1125,13 @@ function connect(url) {
 }
 function onWelcome(m) {
   G.online = true; G.myId = m.id; localStorage.osh_token = m.token;
-  G.money = m.money; G.mine = m.mine; G.hostOf = new Set();
+  G.money = m.money; G.mine = m.mine; G.hostOf = new Set(); G.hosted = new Set(m.hosted || []);
+  if (m.hasPin) localStorage.osh_hasPin = '1';
   for (const k of Object.values(m.kitchens)) setKitchen(k);
   for (const p of m.players) addRemote(p.id, p.name, p.st, p.look);
 }
 function onDisconnect() {
+  if (G.authErr) return;
   toast('Server bilan aloqa uzildi. Qayta ulanmoqda…');
   setTimeout(async () => { if (!(await connect(serverUrl()))) onDisconnect(); else toast('Qayta ulandi'); }, 4000);
 }
@@ -1032,6 +1161,8 @@ function onMsg(m) {
     case 'mine': G.mine = m.mine; if (!$('menu').classList.contains('hide')) renderMenu(); break;
     case 'money': G.money = m.v; break;
     case 'host': if (m.on) G.hostOf.add(m.kid); else G.hostOf.delete(m.kid); if (G.kitchens[m.kid]) ensureView(m.kid); break;
+    case 'hosted': G.hosted = new Set(m.list || []); break;
+    case 'order': showOrder(m.o); break;
     case 'ks': { const v = G.views[m.kid]; if (v && !v.sim) v.apply(m.s); break; }
     case 'act': {
       const v = G.views[m.kid]; if (!v || !v.sim) break;
@@ -1072,9 +1203,12 @@ function addChat(name, text) {
   d.querySelector('b').textContent = name + ':'; d.querySelector('span').textContent = text;
   $('chatLog').appendChild(d);
   while ($('chatLog').children.length > 6) $('chatLog').firstChild.remove();
+  setTimeout(() => d.classList.add('old'), 12000);
+  sfx.plate();
 }
 function sendChat() {
   const t = $('chatIn').value.trim(); $('chatIn').value = ''; $('chatIn').blur();
+  if (IS_TOUCH || !t) $('chatWrap').classList.remove('open');
   if (!t) return;
   addChat(G.name, t); P.ch.bubble(t);
   if (G.online) net.send({ t: 'chat', text: t });
@@ -1307,12 +1441,10 @@ function audioInit() {
   const nb = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = nb.getChannelData(0);
   for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
   SND.noise = nb;
-  speechSynthesis?.getVoices?.();
 }
 function setSound(on) {
   SND.on = on; localStorage.osh_mute = on ? '0' : '1';
   if (SND.master) SND.master.gain.setTargetAtTime(on ? 0.9 : 0, SND.ctx.currentTime, 0.05);
-  if (!on) speechSynthesis?.cancel?.();
   document.querySelectorAll('.muteBtn').forEach((b) => { b.textContent = on ? '🔊' : '🔇'; });
 }
 function env(g, t0, a, peak, dur) { g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(peak, t0 + a); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur); }
@@ -1385,23 +1517,45 @@ const sfx = {
   whoosh() { const t = SND.ctx?.currentTime; if (t === undefined) return; noise(t, 0.9, { f: 300, to: 2400, q: 3, vol: 0.3, a: 0.25 }); },
   thud() { const t = SND.ctx?.currentTime; if (t === undefined) return; tone(120, t, 0.35, { type: 'sine', vol: 0.8, to: 40 }); noise(t, 0.25, { f: 700, q: 0.8, vol: 0.45, type: 'lowpass' }); noise(t + 0.15, 0.6, { f: 1200, vol: 0.08, a: 0.1 }); },
   coin() { const t = SND.ctx?.currentTime; if (t === undefined) return; tone(988, t, 0.1, { type: 'square', vol: 0.06 }); tone(1319, t + 0.08, 0.25, { type: 'square', vol: 0.06 }); },
+  plate() { const t = SND.ctx?.currentTime; if (t === undefined) return; tone(2200, t, 0.12, { type: 'sine', vol: 0.05 }); tone(3100, t + 0.01, 0.08, { type: 'sine', vol: 0.03 }); },
+  ding() { const t = SND.ctx?.currentTime; if (t === undefined) return; tone(784, t, 0.3, { type: 'sine', vol: 0.12 }); tone(1175, t + 0.15, 0.5, { type: 'sine', vol: 0.12 }); },
+  bump() { const t = SND.ctx?.currentTime; if (t === undefined || (sfx._b || 0) > t) return; sfx._b = t + 0.5; tone(90, t, 0.25, { type: 'sine', vol: 0.5, to: 45 }); noise(t, 0.15, { f: 600, vol: 0.3, type: 'lowpass' }); },
 };
-// --- gaplar (brauzerning nutq ovozi) ---
+// o'yin ichidagi sokin musiqa (🎵 tugmasi bilan yoqiladi / o'chiriladi)
+function gameMusic(on) {
+  localStorage.osh_music = on ? '1' : '0';
+  const b = $('musicBtn'); if (b) b.style.opacity = on ? 1 : 0.45;
+  if (on && G.mode === 'play' && SND.ctx) musicStart(0.13); else if (!on) musicStop(0.8);
+}
+$('musicBtn').onclick = () => { audioInit(); gameMusic(localStorage.osh_music === '0'); };
+// --- gaplar: multfilmdagidek "g'o'ng'illagan" ovoz (har bo'g'in — bitta tovush), matn esa ekranda ---
+const VOW = { a: [800, 1250], e: [500, 1900], i: [320, 2300], o: [520, 900], u: [350, 800], 'o‘': [480, 850] };
 function say(text, { pitch = 1, rate = 0.95 } = {}) {
-  if (!SND.on || !window.speechSynthesis) return;
-  const vs = speechSynthesis.getVoices();
-  const v = ['uz', 'tr', 'kk', 'az', 'ru'].map((l) => vs.find((x) => x.lang?.toLowerCase().startsWith(l))).find(Boolean);
-  const u = new SpeechSynthesisUtterance(text.replace(/[‘’'`ʼ]/g, ''));
-  if (v) { u.voice = v; u.lang = v.lang; } else u.lang = 'uz-UZ';
-  u.pitch = pitch; u.rate = rate; u.volume = 1;
-  speechSynthesis.cancel(); speechSynthesis.speak(u);
+  if (!SND.on || !SND.ctx) return;
+  const c = SND.ctx, words = text.toLowerCase().replace(/[^a-zo‘'ʼ ]/g, ' ').split(/\s+/).filter(Boolean);
+  if (SND.voice) { try { SND.voice.gain.setTargetAtTime(0.0001, c.currentTime, 0.02); } catch { } }
+  const bus = c.createGain(); bus.gain.value = 0.9; bus.connect(SND.master); SND.voice = bus;
+  let t = c.currentTime + 0.05; const base = 150 * pitch, syl = 0.105 / rate;
+  for (const w of words) {
+    const vs = w.match(/o‘|[aeiou]/g) || ['a'];
+    vs.forEach((vw, i) => {
+      const [f1, f2] = VOW[vw] || VOW.a, f0 = base * (1 + 0.12 * Math.sin(t * 9) + (i === vs.length - 1 ? -0.08 : 0.06));
+      const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(f0, t); o.frequency.linearRampToValueAtTime(f0 * 0.92, t + syl);
+      const g = c.createGain(); env(g, t, 0.012, 0.22, syl * 0.95);
+      const b1 = c.createBiquadFilter(); b1.type = 'bandpass'; b1.frequency.value = f1; b1.Q.value = 6;
+      const b2 = c.createBiquadFilter(); b2.type = 'bandpass'; b2.frequency.value = f2; b2.Q.value = 9;
+      o.connect(b1); o.connect(b2); b1.connect(g); b2.connect(g); g.connect(bus); o.start(t); o.stop(t + syl + 0.05);
+      t += syl;
+    });
+    t += syl * 0.6;
+  }
 }
 
 // =====================================================================
 //  BOSHIDAGI VIDEO: boy odam qahramonni limuzindan itarib yuboradi
 // =====================================================================
 const intro = { t: 0, len: 12.5, objs: [] };
-function startIntro() {
+function startIntro(silent = false) {
   G.mode = 'intro';
   $('intro').classList.remove('hide');
   const k = G.kitchens[G.mine[0]], p = W.PLOTS[k ? k.plot : 0];
@@ -1413,7 +1567,7 @@ function startIntro() {
   const rich = new Character({ gender: 'm', look: { shirt: 0x1c1c1c, pants: 0x1c1c1c, hat: null, glasses: true, skin: SKINS[0] } }); rich.hidden = true;
   Object.assign(intro, { t: 0, p, dir, laneZ, walkZ, stopX, limo, rich, objs: [limo], dust: [] });
   P.ch.hidden = true;
-  audioInit(); musicStart(0.45); engineStart();
+  audioInit(); if (!silent) { musicStart(0.45); engineStart(); }
   P.pos.set(stopX, 0, walkZ); P.head = p.f > 0 ? Math.PI : 0;
 }
 function ease(t) { return t < 0 ? 0 : t > 1 ? 1 : t * t * (3 - 2 * t); }
@@ -1498,14 +1652,81 @@ function endIntro() {
   P.head = intro.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
   camYaw = P.head + Math.PI;
   subtitle(''); $('intro').classList.add('hide');
-  engineStop(); musicStop(); speechSynthesis?.cancel?.();
+  engineStop(); musicStop(0.6); if (SND.voice) SND.voice.gain.value = 0;
   G.mode = 'play'; $('hud').classList.remove('hide');
   localStorage.osh_seenIntro = '1';
+  if (localStorage.osh_music !== '0') setTimeout(() => gameMusic(true), 1500); else gameMusic(false);
   toast('Joystik bilan yuring. Oshxonangizni sariq nur ko\'rsatadi.', null, 5);
 }
 $('skipBtn').onclick = () => endIntro();
 document.querySelectorAll('.muteBtn').forEach((b) => { b.onclick = () => { audioInit(); setSound(!SND.on); }; });
 setSound(SND.on);
+
+// ---- eshiklar: kimdir yaqinlashsa ochiladi ----
+function updateDoors(dt) {
+  for (const pv of world.plotViews) {
+    const dp = pv.plot.door; let near = false;
+    const chk = (x, z) => { if (Math.hypot(x - dp.x, z - dp.z) < 3.2) near = true; };
+    if (P.room < 0 && !P.drive) chk(P.pos.x, P.pos.z);
+    for (const r of G.remotes.values()) if (r.room < 0) chk(r.x, r.z);
+    const v = G.views[G.plotKid[pv.plot.i]];
+    if (v) for (const e of v.ents.values()) if (e.room < 0 && e.kind !== 'v') chk(e.x, e.z);
+    pv.setDoor(near ? 1 : 0, dt);
+  }
+  for (const [plot, room] of Object.entries(interiors)) {
+    let near = false; const di = room.doorIn;
+    const chk = (x, z) => { if (Math.hypot(x - di.x, z - di.z) < 2.3) near = true; };
+    if (P.room === +plot && P.floor === 1) chk(P.pos.x, P.pos.z);
+    for (const r of G.remotes.values()) if (r.room === +plot) chk(r.x, r.z);
+    const v = G.views[G.plotKid[plot]];
+    if (v) for (const e of v.ents.values()) if (e.room === +plot && !e.fy) chk(e.x, e.z);
+    room.setDoor(near ? 1 : 0, dt);
+  }
+}
+// ---- o'yin ichidagi tovushlar: qadam, olov, odamlar shovqini ----
+const amb = { step: 0, fireT: 0, crowd: null };
+function updateAmbient(dt) {
+  if (!SND.ctx || !SND.on || G.mode !== 'play') return;
+  const t = SND.ctx.currentTime;
+  // qadamlar
+  if (!P.drive && (P.anim === 1 || P.anim === 2) && P.y === 0) {
+    amb.step -= dt;
+    if (amb.step <= 0) { amb.step = P.anim === 2 ? 0.29 : 0.47; noise(t, 0.06, { f: P.room >= 0 ? 1800 : 900, q: 1.2, vol: P.room >= 0 ? 0.09 : 0.06 }); }
+  }
+  const v = currentView();
+  // qozon ostidagi olov chirsillashi
+  if (v && v.cook > 0 && P.floor === 1) {
+    amb.fireT -= dt;
+    if (amb.fireT <= 0) { amb.fireT = rnd(0.05, 0.22); noise(t, rnd(0.01, 0.04), { f: rnd(2000, 5000), q: 4, vol: rnd(0.02, 0.07), type: 'bandpass' }); }
+  }
+  // odamlar shovqini (mijozlar soniga qarab)
+  if (!amb.crowd) {
+    const s = SND.ctx.createBufferSource(); s.buffer = SND.noise; s.loop = true;
+    const f = SND.ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 520; f.Q.value = 0.9;
+    const g = SND.ctx.createGain(); g.gain.value = 0;
+    const lfo = SND.ctx.createOscillator(), lg = SND.ctx.createGain(); lfo.frequency.value = 3.1; lg.gain.value = 140;
+    lfo.connect(lg); lg.connect(f.frequency); lfo.start();
+    s.connect(f); f.connect(g); g.connect(SND.master); s.start();
+    amb.crowd = g;
+  }
+  const n = v ? [...v.ents.values()].filter((e) => e.kind === 'c' && e.room === P.room).length : 0;
+  amb.crowd.gain.setTargetAtTime(Math.min(0.06, n * 0.006), t, 0.5);
+}
+// ---- sifat: sekin telefonda soyani o'chiradi ----
+const perf = { t: 0, n: 0, low: false, checked: 0 };
+function updatePerf(dt) {
+  if (perf.low || G.mode !== 'play') return;
+  perf.t += dt; perf.n++;
+  if (perf.t >= 4) {
+    const fps = perf.n / perf.t; perf.t = 0; perf.n = 0; perf.checked++;
+    if (fps < 28 && perf.checked >= 2) {
+      perf.low = true;
+      renderer.shadowMap.enabled = false; moon.castShadow = false;
+      scene.traverse((o) => { if (o.material) [].concat(o.material).forEach((m) => { m.needsUpdate = true; }); });
+      renderer.setPixelRatio(1); renderer.setSize(innerWidth, innerHeight);
+    }
+  }
+}
 
 // =====================================================================
 //  ASOSIY SIKL
@@ -1518,9 +1739,11 @@ function frame() {
   if (G.mode === 'play') updatePlayer(dt);
   if (G.mode === 'intro') updateIntro(dt);
   if (G.mode !== 'start') {
+    buildObstacles(); updateGhosts();
     for (const v of Object.values(G.views)) { if (v.sim) v.sim.update(dt); v.render(dt, !v.sim); }
-    updateTraffic(dt); updatePeds(dt); updateRemotes(dt);
+    updateTraffic(dt); updatePeds(dt); updateRemotes(dt); updateDoors(dt);
   }
+  updateDay(); updateAmbient(dt); updatePerf(dt);
   if (G.mode === 'play') { updateCamera(dt); updateHud(dt); }
   if (G.mode === 'start') {                 // boshlash ekrani orqasida shahar aylanadi
     camera.position.set(Math.sin(T * 0.05) * 90, 45, Math.cos(T * 0.05) * 90); camera.lookAt(0, 0, 0);
@@ -1555,9 +1778,13 @@ $('startBtn').onclick = async () => {
   audioInit();
   const name = $('nameIn').value.trim().slice(0, 16) || 'Oshpaz';
   G.name = name; localStorage.osh_name = name;
+  const pin = $('pinIn').value.trim();
+  if (pin && !/^\d{4,6}$/.test(pin)) { $('loadTxt').textContent = "PIN 4–6 ta raqamdan iborat bo'lishi kerak"; return; }
+  G.pin = pin || null; G.authErr = null; $('loadTxt').textContent = '';
   $('startBtn').disabled = true; $('startBtn').textContent = 'Ulanmoqda…';
   try { if (IS_TOUCH) await document.documentElement.requestFullscreen?.(); } catch { }
   const ok = await connect(serverUrl());
+  if (!ok && G.authErr) { $('loadTxt').textContent = G.authErr; $('startBtn').disabled = false; $('startBtn').textContent = 'Boshlash'; $('pinIn').focus(); return; }
   if (!ok) { G.online = false; loadOffline(); for (const k of Object.values(G.kitchens)) setKitchen(k); }
   for (const p of W.PLOTS) if (!G.plotKid[p.i]) world.plotViews[p.i].set(null);
   localStorage.osh_look = JSON.stringify(myLook);
@@ -1565,8 +1792,14 @@ $('startBtn').onclick = async () => {
   $('start').classList.add('hide');
   updateOnline();
   if (!ok) toast("Oflayn rejim: multiplayer uchun serverga ulaning (README'ga qarang)", null, 6);
-  if (new URLSearchParams(location.search).has('nointro')) { startIntro(); endIntro(); } else startIntro();
+  const qs = new URLSearchParams(location.search);
+  const seen = localStorage.osh_seenIntro === '1' && !G.replayIntro;
+  if (qs.has('nointro') || (seen && !qs.has('intro'))) { startIntro(true); endIntro(); } else startIntro();
+  if (G.online) setTimeout(() => { if (!localStorage.osh_hasPin) toast("Maslahat: ismingizga PIN qo'ysangiz, boshqa telefondan ham o'z oshxonangizga kira olasiz (qayta kirishda PIN yozing).", null, 8); }, 9000);
 };
+if (localStorage.osh_seenIntro === '1') $('replayBtn').classList.remove('hide');
+$('replayBtn').onclick = () => { G.replayIntro = true; $('replayBtn').textContent = "Video ko'rsatiladi ✓"; };
+$('pinIn').addEventListener('input', () => { $('pinIn').value = $('pinIn').value.replace(/\D/g, '').slice(0, 6); });
 
 // sinov uchun (brauzer konsolida): __osh.G, __osh.P
-window.__osh = { TS: 1, intro, G, P, SIT, Character, setKitchen, startDrive, offerOrder, acceptOrder, changeFloor, world, doAction, findAction, exitRoom, scene, camera, W, E, enterRoom, getInterior, setCam: (y, p, d) => { camYaw = y; camPitch = p; camDist = d; } };
+window.__osh = { TS: 1, intro, G, P, camTarget, renderer, SIT, Character, setKitchen, startDrive, offerOrder, acceptOrder, changeFloor, world, doAction, findAction, exitRoom, scene, camera, W, E, enterRoom, getInterior, setCam: (y, p, d) => { camYaw = y; camPitch = p; camDist = d; } };

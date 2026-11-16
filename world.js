@@ -4,6 +4,95 @@
 //  Hamma narsa kod bilan yasaladi (rasm fayllari yo'q) — hajm kichik.
 // =====================================================================
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/addons/BufferGeometryUtils.js';
+
+// ---------- multfilm (toon) uslubi: 3 pog'onali yorug'lik ----------
+const GRAD = (() => {
+  const t = new THREE.DataTexture(new Uint8Array([120, 195, 255]), 3, 1, THREE.RedFormat);
+  t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true; return t;
+})();
+const toonCache = new WeakMap();
+export function toonMat(m) {
+  if (!m || m.isMeshBasicMaterial || m.isMeshToonMaterial || !(m.isMeshLambertMaterial || m.isMeshStandardMaterial || m.isMeshPhongMaterial)) return m;
+  let t = toonCache.get(m); if (t) return t;
+  t = new THREE.MeshToonMaterial({
+    color: m.color, map: m.map || null, gradientMap: GRAD, vertexColors: m.vertexColors, side: m.side,
+    transparent: m.transparent, opacity: m.opacity, emissive: m.emissive || new THREE.Color(0), depthWrite: m.depthWrite, fog: m.fog,
+    polygonOffset: m.polygonOffset, polygonOffsetFactor: m.polygonOffsetFactor, polygonOffsetUnits: m.polygonOffsetUnits,
+  });
+  toonCache.set(m, t); return t;
+}
+export function toonify(root) {
+  root.traverse((o) => { if (o.isMesh) o.material = Array.isArray(o.material) ? o.material.map(toonMat) : toonMat(o.material); });
+  return root;
+}
+export const VC_MAT = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: GRAD });
+// yumaloq quti (geometriya keshlanadi)
+const rbCache = new Map();
+export function RB(w, h, d, r = 0.08, seg = 2) {
+  r = Math.min(r, w * 0.45, h * 0.45, d * 0.45);
+  const k = `${w.toFixed(3)}|${h.toFixed(3)}|${d.toFixed(3)}|${r.toFixed(3)}|${seg}`;
+  let g = rbCache.get(k); if (!g) { g = new RoundedBoxGeometry(w, h, d, seg, r); rbCache.set(k, g); } return g;
+}
+// Bir xil materialli qo'zg'almas bo'laklarni bitta bo'lakka birlashtirish (telefonda tez ishlashi uchun).
+// userData.dyn = true bo'lgan guruhlarga tegmaydi.
+const _inv = new THREE.Matrix4(), _mw = new THREE.Matrix4();
+function cleanGeo(o, vc, matrix) {
+  const g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+  const keep = ['position', 'normal', 'uv', ...(vc ? ['color'] : [])];
+  for (const k of Object.keys(g.attributes)) if (!keep.includes(k)) g.deleteAttribute(k);
+  if (!g.attributes.normal) g.computeVertexNormals();
+  if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+  g.clearGroups(); g.morphAttributes = {};
+  g.applyMatrix4(matrix);
+  return g;
+}
+export function mergeStatic(root) {
+  root.updateMatrixWorld(true);
+  _inv.copy(root.matrixWorld).invert();
+  const groups = new Map();
+  const dyn = (o) => { for (let p = o; p && p !== root; p = p.parent) if (p.userData.dyn || !p.visible) return true; return false; };
+  root.traverse((o) => {
+    if (!o.isMesh || o.isInstancedMesh || Array.isArray(o.material) || dyn(o)) return;
+    const key = `${o.material.uuid}|${o.castShadow}|${o.receiveShadow}|${o.renderOrder}`;
+    if (!groups.has(key)) groups.set(key, []); groups.get(key).push(o);
+  });
+  let n = 0;
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const vc = !!list[0].material.vertexColors;
+    if (vc && list.some((o) => !o.geometry.attributes.color)) continue;
+    const merged = mergeGeometries(list.map((o) => cleanGeo(o, vc, _mw.multiplyMatrices(_inv, o.matrixWorld))), false);
+    if (!merged) continue;
+    const mesh = new THREE.Mesh(merged, list[0].material);
+    mesh.castShadow = list[0].castShadow; mesh.receiveShadow = list[0].receiveShadow; mesh.renderOrder = list[0].renderOrder;
+    root.add(mesh);
+    for (const o of list) o.parent.remove(o);
+    n += list.length - 1;
+  }
+  return n;
+}
+// Guruhning to'g'ridan-to'g'ri bolalarini rang bo'yicha bitta bo'lakka yig'ish (personaj, mashina)
+const _cc = new THREE.Color();
+export function mergeChildrenVC(group, mat = VC_MAT) {
+  const kids = group.children.filter((o) => o.isMesh && !o.isInstancedMesh && !Array.isArray(o.material) && o.material.color && !o.material.map && !o.userData.keep);
+  if (kids.length < 2) return null;
+  const geos = kids.map((o) => {
+    o.updateMatrix();
+    const g = cleanGeo(o, false, o.matrix);
+    _cc.copy(o.material.color);
+    const n = g.attributes.position.count, c = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { c[i * 3] = _cc.r; c[i * 3 + 1] = _cc.g; c[i * 3 + 2] = _cc.b; }
+    g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+    return g;
+  });
+  const mesh = new THREE.Mesh(mergeGeometries(geos, false), mat);
+  mesh.castShadow = kids.some((o) => o.castShadow);
+  for (const o of kids) group.remove(o);
+  group.add(mesh);
+  return mesh;
+}
 
 // ---------- shahar tarhi ----------
 export const LINES = [-160, -96, -32, 32, 96, 160];     // yo'llar (x va z bo'yicha)
@@ -89,6 +178,15 @@ function makeTextures() {             // Roblox uslubi: toza, yorqin, sodda rang
   TEX.tile = tilePat('#1f7ad1', '#5ec8ff', '#fff6dc', '#f4b630', '#a8e4ff');
   TEX.tileTeal = tilePat('#14a394', '#7fe0cf', '#ffffff', '#f4b630', '#bff3e8');
   TEX.tileRed = tilePat('#9e1f2e', '#e0a040', '#fff3d6', '#1f5fb0', '#f0c070');
+  TEX.suzani = canvasTex(128, 192, (g, w, h) => {      // suzani (devor gilami)
+    g.fillStyle = '#f6ead2'; g.fillRect(0, 0, w, h);
+    g.strokeStyle = '#b8202f'; g.lineWidth = 8; g.strokeRect(6, 6, w - 12, h - 12);
+    const rose = (x, y, r, c1, c2) => { g.fillStyle = c1; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); g.fillStyle = c2; g.beginPath(); g.arc(x, y, r * 0.55, 0, 7); g.fill(); g.fillStyle = c1; g.beginPath(); g.arc(x, y, r * 0.22, 0, 7); g.fill(); };
+    rose(64, 96, 30, '#c8202f', '#f4b630');
+    for (const [x, y] of [[32, 40], [96, 40], [32, 152], [96, 152]]) rose(x, y, 16, '#1e3f8a', '#e8402f');
+    g.strokeStyle = '#2f8a4a'; g.lineWidth = 3;
+    for (const [x, y] of [[32, 40], [96, 40], [32, 152], [96, 152]]) { g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(64, 96, 64, 96); g.stroke(); }
+  });
   TEX.parquet = canvasTex(128, 128, (g, w, h) => {
     for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) {
       g.fillStyle = `hsl(22,${45 + Math.random() * 10}%,${26 + Math.random() * 7}%)`; g.fillRect(x * 32, y * 32, 32, 32);
@@ -255,45 +353,52 @@ function pointedArch(w, h) {         // o'tkir uchli sharqona arka
   return s;
 }
 
-// ---------- mashina (yumaloq shakl, to'rtburchak emas) ----------
-export function makeCar(color = 0xe2e2e2, { limo = false } = {}) {
-  const E = limo ? 2.8 : 0;          // limuzin uzunligi
-  const g = new THREE.Group();
-  const s = new THREE.Shape();
-  s.moveTo(2.25, 0.32); s.lineTo(2.3, 0.62); s.quadraticCurveTo(2.25, 0.86, 1.85, 0.9);
-  s.lineTo(0.95, 0.96); s.quadraticCurveTo(0.6, 1.36, 0.25, 1.4);
-  s.lineTo(-1.05 - E, 1.4); s.quadraticCurveTo(-1.55 - E, 1.36, -1.75 - E, 1.0);
-  s.lineTo(-2.2 - E, 0.92); s.quadraticCurveTo(-2.32 - E, 0.7, -2.28 - E, 0.32); s.lineTo(2.25, 0.32);
-  const body = new THREE.Mesh(
-    new THREE.ExtrudeGeometry(s, { depth: 1.62, bevelEnabled: true, bevelThickness: 0.08, bevelSize: 0.07, bevelSegments: 3, curveSegments: 10 }),
-    new THREE.MeshStandardMaterial({ color, metalness: 0.55, roughness: 0.32 }));
-  body.position.z = -0.81; body.castShadow = true; g.add(body);
-  const gs = new THREE.Shape();
-  gs.moveTo(0.86, 0.98); gs.quadraticCurveTo(0.55, 1.32, 0.24, 1.35); gs.lineTo(-1.0 - E, 1.35); gs.quadraticCurveTo(-1.45 - E, 1.3, -1.62 - E, 1.0); gs.lineTo(0.86, 0.98);
-  const glass = new THREE.Mesh(new THREE.ExtrudeGeometry(gs, { depth: 1.7, bevelEnabled: false }),
-    new THREE.MeshStandardMaterial({ color: 0x1c2333, metalness: 0.9, roughness: 0.1 }));
-  glass.position.z = -0.85; g.add(glass);
-  const wg = new THREE.CylinderGeometry(0.36, 0.36, 0.26, 18).rotateX(Math.PI / 2);
-  const wm = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
-  const rimG = new THREE.CylinderGeometry(0.2, 0.2, 0.28, 12).rotateX(Math.PI / 2);
-  const rimM = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, metalness: 0.8, roughness: 0.3 });
-  for (const wx of [1.4, -1.45 - E]) for (const wz of [0.82, -0.82]) {
-    const w = new THREE.Mesh(wg, wm); w.position.set(wx, 0.36, wz); g.add(w);
-    const r = new THREE.Mesh(rimG, rimM); r.position.copy(w.position); g.add(r);
+// ---------- mashinalar: multfilm uslubida, yumaloq (Nexia, Spark, Cobalt, taksi, limuzin) ----------
+const CAR_KINDS = ['sedan', 'sedan', 'hatch', 'hatch', 'suv', 'taxi'];
+let PLATE_TEX = null;
+const lam = (c) => new THREE.MeshLambertMaterial({ color: c });
+export function makeCar(color = 0xe2e2e2, { limo = false, kind = null } = {}) {
+  kind = limo ? 'limo' : (kind || CAR_KINDS[(Math.random() * CAR_KINDS.length) | 0]);
+  if (kind === 'taxi') color = 0xffc928;
+  const D = {                       // [uzunlik, kenglik, kuzov balandligi, kabina uzunligi, kabina siljishi, g'ildirak oralig'i]
+    sedan: [4.4, 1.8, 0.72, 2.2, -0.25, 1.45], hatch: [3.5, 1.7, 0.78, 2.1, -0.35, 1.15], suv: [4.3, 1.9, 0.95, 2.5, -0.35, 1.45],
+    taxi: [4.4, 1.8, 0.72, 2.2, -0.25, 1.45], limo: [7.2, 1.9, 0.75, 5.0, -0.5, 2.7],
+  }[kind];
+  const [L, Wd, BH, CL, CX, WB] = D;
+  const g = new THREE.Group(), parts = new THREE.Group(); g.add(parts);
+  const add = (geo, c, x, y, z) => { const m = new THREE.Mesh(geo, lam(c)); m.position.set(x, y, z); m.castShadow = true; parts.add(m); return m; };
+  const bodyY = 0.42 + BH / 2;
+  add(RB(L, BH, Wd, 0.32, 3), color, 0, bodyY, 0);                                   // kuzov
+  const cabY = 0.42 + BH + 0.33;
+  add(RB(CL, 0.72, Wd - 0.18, 0.3, 3), color, CX, cabY, 0);                          // kabina
+  add(RB(CL + 0.05, 0.42, Wd - 0.12, 0.2, 3), 0x22314a, CX, cabY + 0.02, 0);        // oynalar (atrofida)
+  add(RB(CL - 0.25, 0.12, Wd - 0.3, 0.06, 2), color, CX, cabY + 0.33, 0);           // tom
+  for (const s of [1, -1]) {
+    add(RB(0.35, 0.3, Wd - 0.1, 0.12, 2), 0x55595f, s * (L / 2 + 0.02), 0.62, 0);   // bamper
+    add(new THREE.SphereGeometry(0.15, 12, 10).scale(0.6, 1, 1), s > 0 ? 0xfff8d6 : 0xff3b2f, s * (L / 2 - 0.05), bodyY + 0.12, 0.55);
+    add(new THREE.SphereGeometry(0.15, 12, 10).scale(0.6, 1, 1), s > 0 ? 0xfff8d6 : 0xff3b2f, s * (L / 2 - 0.05), bodyY + 0.12, -0.55);
+    add(RB(0.18, 0.12, 0.14, 0.05), color, CX + CL / 2 - 0.15, cabY - 0.2, s * (Wd / 2 + 0.05));   // ko'zgu
   }
-  const hl = new THREE.MeshBasicMaterial({ color: 0xfff6c8 }), tl = new THREE.MeshBasicMaterial({ color: 0xff3020 });
-  for (const z of [0.55, -0.55]) {
-    const h = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), hl); h.scale.set(0.5, 1, 1.4); h.position.set(2.3, 0.7, z); g.add(h);
-    const t = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), tl); t.scale.set(0.5, 1, 1.6); t.position.set(-2.33 - E, 0.72, z); g.add(t);
+  add(RB(0.08, 0.22, 0.8, 0.05), 0x2a2d33, L / 2 + 0.01, bodyY - 0.02, 0);          // panjara
+  if (kind === 'taxi') { add(RB(0.6, 0.25, 0.35, 0.08), 0x1c1c1c, CX, cabY + 0.52, 0); add(RB(0.5, 0.12, 0.38, 0.05), 0xffffff, CX, cabY + 0.52, 0); }
+  // g'ildiraklar
+  const wg = new THREE.CylinderGeometry(0.42, 0.42, 0.34, 20).rotateX(Math.PI / 2), hub = new THREE.CylinderGeometry(0.22, 0.22, 0.36, 14).rotateX(Math.PI / 2);
+  for (const wx of [WB, -WB]) for (const wz of [Wd / 2 - 0.12, -(Wd / 2 - 0.12)]) { add(wg, 0x1d1d1f, wx, 0.42, wz); add(hub, 0xf2f2f2, wx, 0.42, wz); }
+  mergeChildrenVC(parts);
+  // raqam (umumiy tekstura)
+  PLATE_TEX = PLATE_TEX || textTexture('01 A 777 AA', { w: 256, h: 64, bg: '#ffffff', fg: '#1c1c1c', border: '#1c1c1c', font: 'bold 34px sans-serif' });
+  for (const s of [1, -1]) {
+    const pl = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.16), new THREE.MeshBasicMaterial({ map: PLATE_TEX }));
+    pl.position.set(s * (L / 2 + 0.2), 0.62, 0); pl.rotation.y = s * Math.PI / 2; g.add(pl);
   }
-  const beam = new THREE.Mesh(unitPlane, new THREE.MeshBasicMaterial({ map: TEX.glow, color: 0xfff0c0, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
-  beam.scale.set(9, 1, 5); beam.position.set(6.5, 0.06, 0); beam.visible = false; g.add(beam);
+  const beam = new THREE.Mesh(unitPlane, new THREE.MeshBasicMaterial({ map: TEX.glow, color: 0xfff0c0, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }));
+  beam.scale.set(9, 1, 5); beam.position.set(L / 2 + 4.3, 0.08, 0); beam.visible = false; g.add(beam); g.userData.beam = beam;
   if (limo) {                        // limuzin eshigi (ochiladi)
-    const door = new THREE.Group(); door.position.set(-1.2, 0, 0.86);
-    const dm = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.95, 0.06), body.material); dm.position.set(-0.65, 0.85, 0); door.add(dm);
+    const door = new THREE.Group(); door.position.set(-1.2, 0, Wd / 2 - 0.04);
+    const dm = new THREE.Mesh(RB(1.3, 0.95, 0.08, 0.04), lam(color)); dm.position.set(-0.65, 0.95, 0.02); door.add(dm);
     g.add(door); g.userData.door = door;
   }
-  return g;
+  return toonify(g);
 }
 
 // =====================================================================
@@ -318,14 +423,19 @@ export function buildWorld(scene) {
   skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyCol, 3));
   const sky = new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false }));
   scene.add(sky);
+  sky.userData.dyn = true;
   const starG = new THREE.BufferGeometry(), starP = [];
   for (let i = 0; i < 600; i++) { const a = Math.random() * Math.PI * 2, e = rnd(0.25, 1.3); starP.push(Math.cos(a) * Math.cos(e) * 650, Math.sin(e) * 650, Math.sin(a) * Math.cos(e) * 650); }
   starG.setAttribute('position', new THREE.Float32BufferAttribute(starP, 3));
+  const stars = new THREE.Points(starG, new THREE.PointsMaterial({ color: 0xffffff, size: 2, sizeAttenuation: false, fog: false, transparent: true, opacity: 0 }));
+  sky.add(stars);
+  const moonSpr = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, color: 0xfff3d0, fog: false, transparent: true, opacity: 0 }));
+  moonSpr.position.set(-300, 260, -420); moonSpr.scale.set(60, 60, 1); sky.add(moonSpr);
 
   const sun = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, color: 0xfffbe8, fog: false }));
   sun.position.set(280, 330, -360); sun.scale.set(90, 90, 1); sky.add(sun);
   // bulutlar (yumshoq, oq)
-  const cloudM = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0xdde8f5, fog: false });
+  const cloudM = new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false });
   const puff = new THREE.IcosahedronGeometry(1, 2);
   for (let i = 0; i < 26; i++) {
     const cg = new THREE.Group(), a = Math.random() * Math.PI * 2, r = rnd(380, 560);
@@ -388,13 +498,22 @@ export function buildWorld(scene) {
     const side = ((d + 400) / 16) % 2 < 1 ? 1 : -1;
     lamp(d, l + side * 7.6, 0, -side); lamp(l + side * 7.6, d, -side, 0);
   }
-  poleB.build(scene); armB.build(scene); bulbB.build(scene);   // kunduzi yerga nur tushmaydi
+  poleB.build(scene); armB.build(scene); bulbB.build(scene);
+  const pools = poolB.build(scene); pools.visible = false;            // kechasi yerga sariq nur tushadi
   const haloG = new THREE.BufferGeometry(); haloG.setAttribute('position', new THREE.Float32BufferAttribute(halos, 3));
+  const haloPts = new THREE.Points(haloG, new THREE.PointsMaterial({ map: TEX.glow, color: 0xffd27a, size: 3.2, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
+  haloPts.visible = false; scene.add(haloPts);
 
 
   // --- daraxtlar ---
   const trunkB = new Batch(new THREE.CylinderGeometry(0.15, 0.22, 1, 7), new THREE.MeshLambertMaterial({ color: 0x8a5a34 }));
-  const crownB = new Batch(new THREE.IcosahedronGeometry(1, 1), M.inst);
+  const crownGeo = mergeGeometries([                         // multfilmdagi kabi "bo'rtiq" toj
+    new THREE.IcosahedronGeometry(1, 2),
+    new THREE.IcosahedronGeometry(0.7, 2).translate(0.62, -0.25, 0.2),
+    new THREE.IcosahedronGeometry(0.7, 2).translate(-0.55, -0.2, -0.3),
+    new THREE.IcosahedronGeometry(0.6, 2).translate(0.05, 0.55, 0.15),
+  ].map((g) => { g.deleteAttribute('uv'); return g; }));
+  const crownB = new Batch(crownGeo, M.inst);
   const tree = (x, z, s = 1) => {
     const h = rnd(2.2, 3.2) * s; trunkB.add(x, h / 2, z, 0, s, h, s);
     const g = new THREE.Color().setHSL(rnd(0.25, 0.34), rnd(0.55, 0.7), rnd(0.36, 0.46));
@@ -402,9 +521,11 @@ export function buildWorld(scene) {
   };
 
   // --- hovlilar (uylar) ---
-  const bodyB = new Batch(unitBox, M.inst), fenceB = new Batch(unitBox, M.inst);
+  const bodyB = new Batch(RB(11, 4, 8, 0.45, 3), M.inst);
+  const fenceBs = new Map();                                       // devor o'lchami bo'yicha
+  const fenceAdd = (x, y, z, w, h, d, c) => { const k = `${w}|${h}|${d}`; if (!fenceBs.has(k)) fenceBs.set(k, new Batch(RB(w, h, d, 0.12), M.inst)); fenceBs.get(k).add(x, y, z, 0, 1, 1, 1, c); };
   const yardB = new Batch(unitPlane, M.ground(0xd9c49a));
-  const roofGeo = (() => { const s = new THREE.Shape(); s.moveTo(-4.6, 0); s.lineTo(0, 2.3); s.lineTo(4.6, 0); s.lineTo(-4.6, 0); return new THREE.ExtrudeGeometry(s, { depth: 12.4, bevelEnabled: false }).translate(0, 0, -6.2).rotateY(Math.PI / 2); })();
+  const roofGeo = (() => { const s = new THREE.Shape(); s.moveTo(-4.7, -0.1); s.lineTo(0, 2.4); s.lineTo(4.7, -0.1); s.lineTo(-4.7, -0.1); return new THREE.ExtrudeGeometry(s, { depth: 11.8, bevelEnabled: true, bevelThickness: 0.3, bevelSize: 0.3, bevelSegments: 3 }).translate(0, 0, -5.9).rotateY(Math.PI / 2); })();
   const roofB = new Batch(roofGeo, M.inst);
   const doorB = new Batch(vPlane, new THREE.MeshLambertMaterial({ map: TEX.wood }));
   const winLit = new Batch(vPlane, M.lit), winDark = new Batch(vPlane, M.litDim);
@@ -414,13 +535,13 @@ export function buildWorld(scene) {
     const W = (lx, lz) => [cx + lx * f, cz + lz * f];            // f=-1 => 180° burilgan
     const ry = f > 0 ? 0 : Math.PI;
     let [x, z] = W(0, -3.5);
-    bodyB.add(x, 2, z, ry, 11, 4, 8, WALLS[(Math.random() * WALLS.length) | 0]); addBox(x, z, 11, 8);
+    bodyB.add(x, 2, z, ry, 1, 1, 1, WALLS[(Math.random() * WALLS.length) | 0]); addBox(x, z, 11, 8);
     roofB.add(x, 4, z, ry, 1, 1, 1, ROOFS[(Math.random() * ROOFS.length) | 0]);
     [x, z] = W(0, 0.52); doorB.add(x, 1.1, z, ry, 1.2, 2.2, 1);
     for (const wx of [-3.4, 3.4]) { [x, z] = W(wx, 0.52); (Math.random() < 0.65 ? winLit : winDark).add(x, 2.1, z, ry, 1.5, 1.2, 1); }
     [x, z] = W(0, 0); yardB.add(x, 0.04, z, 0, 15.4, 1, 23.4);
     const fc = 0xf0dfc0;
-    const wall = (lx, lz, w, d) => { const [wx, wz] = W(lx, lz); const ww = f > 0 ? w : w, dd = d; fenceB.add(wx, 0.9, wz, 0, ww, 1.8, dd, fc); addBox(wx, wz, ww, dd); };
+    const wall = (lx, lz, w, d) => { const [wx, wz] = W(lx, lz); fenceAdd(wx, 0.9, wz, w, 1.8, d, fc); addBox(wx, wz, w, d); };
     wall(-4.75, 11.6, 5.5, 0.3); wall(4.75, 11.6, 5.5, 0.3);        // old devor (darvoza ochiq)
     wall(-7.6, 0, 0.3, 23.4); wall(7.6, 0, 0.3, 23.4); wall(0, -11.6, 15.5, 0.3);
     for (const tx of [-5, 5]) { const [ax, az] = W(tx, 7); tree(ax, az, 0.9); }
@@ -460,7 +581,7 @@ export function buildWorld(scene) {
     niche.position.set(0, 0, -15); g.add(niche);
     const ndoor = new THREE.Mesh(new THREE.ShapeGeometry(archShape(3, 5)), new THREE.MeshBasicMaterial({ color: 0xffc77a }));
     ndoor.position.set(0, 0, -14.95); g.add(ndoor);
-    const hall = new THREE.Mesh(new THREE.BoxGeometry(26, 9, 12), M.plaster); hall.position.set(0, 4.5, -21); hall.castShadow = true; g.add(hall);
+    const hall = new THREE.Mesh(RB(26, 9, 12, 0.5, 3), M.plaster); hall.position.set(0, 4.5, -21); hall.castShadow = true; g.add(hall);
     const band = new THREE.Mesh(new THREE.BoxGeometry(26.3, 1, 12.3), M.tile); band.position.set(0, 8.6, -21); g.add(band);
     const domeM = new THREE.MeshStandardMaterial({ color: 0x2fb5c9, roughness: 0.35, metalness: 0.2 });
     const dome = new THREE.Mesh(new THREE.SphereGeometry(5, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2), domeM);
@@ -482,7 +603,7 @@ export function buildWorld(scene) {
     // favvora
     const basin = new THREE.Mesh(new THREE.CylinderGeometry(5, 5.3, 0.8, 40), new THREE.MeshLambertMaterial({ color: 0xd8d0c0 })); basin.position.set(0, 0.4, 10); g.add(basin);
     const water = new THREE.Mesh(new THREE.CircleGeometry(4.6, 40).rotateX(-Math.PI / 2), M.water); water.position.set(0, 0.75, 10); g.add(water);
-    const jet = new THREE.Mesh(new THREE.ConeGeometry(0.6, 3.5, 16, 1, true), new THREE.MeshBasicMaterial({ color: 0xbfe6ff, transparent: true, opacity: 0.45 })); jet.position.set(0, 2.4, 10); g.add(jet);
+    const jet = new THREE.Mesh(new THREE.ConeGeometry(0.6, 3.5, 16, 1, true), new THREE.MeshBasicMaterial({ color: 0xbfe6ff, transparent: true, opacity: 0.45 })); jet.position.set(0, 2.4, 10); jet.userData.dyn = true; g.add(jet);
     addBox(0, 10, 10, 10);
     updaters.push((t) => { jet.scale.y = 1 + Math.sin(t * 3) * 0.12; jet.rotation.y = t; });
     // bayroq
@@ -494,7 +615,7 @@ export function buildWorld(scene) {
     });
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 14, 8), M.metal); pole.position.set(-20, 7, -6); g.add(pole);
     const flag = new THREE.Mesh(new THREE.PlaneGeometry(5, 2.5, 10, 1), new THREE.MeshLambertMaterial({ map: flagTex, side: THREE.DoubleSide }));
-    flag.position.set(-17.5, 12.5, -6); g.add(flag);
+    flag.position.set(-17.5, 12.5, -6); flag.userData.dyn = true; g.add(flag);
     const fp = flag.geometry.attributes.position, fx0 = Float32Array.from(fp.array);
     updaters.push((t) => { for (let i = 0; i < fp.count; i++) { const x = fx0[i * 3]; fp.setZ(i, Math.sin(t * 3 + x * 1.2) * 0.25 * (x + 2.5) / 5); } fp.needsUpdate = true; });
     for (const [bx, bz] of [[-8, 18], [8, 18], [-20, 18], [20, 18]]) bench(g, bx, bz, 0);
@@ -502,8 +623,8 @@ export function buildWorld(scene) {
   }
   function bench(g, x, z, ry) {
     const b = new THREE.Group(); b.position.set(x, 0, z); b.rotation.y = ry;
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.12, 0.6), M.wood); seat.position.y = 0.5; b.add(seat);
-    const back = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.5, 0.08), M.wood); back.position.set(0, 0.85, -0.28); b.add(back);
+    const seat = new THREE.Mesh(RB(2.2, 0.14, 0.6, 0.06), M.wood); seat.position.y = 0.5; b.add(seat);
+    const back = new THREE.Mesh(RB(2.2, 0.5, 0.1, 0.05), M.wood); back.position.set(0, 0.85, -0.28); b.add(back);
     for (const lx of [-0.9, 0.9]) { const l = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.5, 0.5), M.dark); l.position.set(lx, 0.25, 0); b.add(l); }
     g.add(b);
   }
@@ -513,20 +634,20 @@ export function buildWorld(scene) {
     const cx = 0, cz = -64;
     const pv = new THREE.Mesh(new THREE.PlaneGeometry(48, 48).rotateX(-Math.PI / 2), M.ground(0xd8cfc2));
     pv.position.set(cx, 0.05, cz); scene.add(pv);
-    const tableB = new Batch(unitBox, M.inst), fruitB = new Batch(new THREE.SphereGeometry(0.22, 8, 6), M.inst);
+    const tableB = new Batch(RB(3.4, 1, 1.6, 0.12), M.inst), legB = new Batch(new THREE.CylinderGeometry(0.06, 0.06, 2.8, 8), M.inst), fruitB = new Batch(new THREE.SphereGeometry(0.22, 8, 6), M.inst);
     const fruitCols = [0xe8641e, 0xd9453b, 0xe8d23a, 0x3fa65a, 0x7a3e9e, 0xd9b26a];
     let n = 0;
     for (let r = 0; r < 3; r++) for (let c = 0; c < 4; c++) {
       const x = cx - 15 + c * 10, z = cz - 12 + r * 11;
-      tableB.add(x, 0.5, z, 0, 3.4, 1, 1.6, 0xc9894a); addBox(x, z, 3.6, 1.8);
-      for (const px of [-1.6, 1.6]) for (const pz of [-0.7, 0.7]) tableB.add(x + px, 1.4, z + pz, 0, 0.1, 2.8, 0.1, 0x8a5a34);
+      tableB.add(x, 0.5, z, 0, 1, 1, 1, 0xc9894a); addBox(x, z, 3.6, 1.8);
+      for (const px of [-1.6, 1.6]) for (const pz of [-0.7, 0.7]) legB.add(x + px, 1.4, z + pz, 0, 1, 1, 1, 0x8a5a34);
       const aw = new THREE.Mesh(new THREE.PlaneGeometry(4, 2.6), new THREE.MeshLambertMaterial({ map: TEX.awning[n++ % 4], side: THREE.DoubleSide }));
       aw.rotation.x = -Math.PI / 2 + 0.25; aw.position.set(x, 2.85, z); scene.add(aw);
       const fc = fruitCols[(Math.random() * fruitCols.length) | 0];
       for (let k = 0; k < 14; k++) fruitB.add(x + rnd(-1.4, 1.4), 1.12, z + rnd(-0.6, 0.6), 0, 1, 1, 1, Math.random() < 0.8 ? fc : fruitCols[k % 6]);
       if (Math.random() < 0.5) for (let k = 0; k < 3; k++) fruitB.add(x + rnd(-1, 1), 1.3, z + rnd(-0.4, 0.4), 0, 2.4, 1.6, 1.6, 0x9ccc4a); // qovun
     }
-    tableB.build(scene, { shadow: true }); fruitB.build(scene);
+    tableB.build(scene, { shadow: true }); legB.build(scene); fruitB.build(scene);
     const sign = new THREE.Mesh(new THREE.PlaneGeometry(10, 2), new THREE.MeshBasicMaterial({ map: textTexture('Andijon bozori', { bg: '#2e6fa8', fg: '#fff' }) }));
     sign.position.set(cx, 5.2, cz + 24.3); scene.add(sign);
     for (const sx of [-5.2, 5.2]) { const p = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 6, 10), M.tile); p.position.set(cx + sx, 3, cz + 24.3); scene.add(p); addBox(cx + sx, cz + 24.3, 0.5, 0.5); }
@@ -579,7 +700,7 @@ export function buildWorld(scene) {
   }
 
   trunkB.build(scene, { shadow: true }); crownB.build(scene, { shadow: true });
-  bodyB.build(scene, { shadow: true, receive: true }); roofB.build(scene, { shadow: true }); fenceB.build(scene, { receive: true });
+  bodyB.build(scene, { shadow: true, receive: true }); roofB.build(scene, { shadow: true }); for (const fb of fenceBs.values()) fb.build(scene, { receive: true });
   yardB.build(scene, { receive: true }); doorB.build(scene); winLit.build(scene); winDark.build(scene);
 
   // chegara (shahar tashqarisiga chiqib ketmaslik)
@@ -587,6 +708,7 @@ export function buildWorld(scene) {
 
   // --- biznes joylari (tashqi ko'rinish) ---
   const plotViews = PLOTS.map((p) => makePlotView(scene, p, colliders));
+  plotViews.forEach((pv) => { pv.group.userData.dyn = true; });
 
   // bayram bezaklari: ko'chalar ustida bayroqchalar
   let festive = null;
@@ -610,8 +732,30 @@ export function buildWorld(scene) {
     if (festive) festive.visible = on;
   }
 
+  // multfilm uslubi va tezlik: hamma materiallarni toon qilish, qo'zg'almas bo'laklarni birlashtirish
+  toonify(scene);
+  const merged = mergeStatic(scene);
+  scene.userData.mergedCount = merged;
+
+  // kun va tun: day = 1 kunduz, 0 tun
+  const DAY = { top: new THREE.Color(0xffffff), night: new THREE.Color(0x1b2350), dusk: new THREE.Color(0xffb37a) };
+  const litT = toonMat(M.lit), litD = toonMat(M.litDim);
+  let lastDay = -1;
+  function setTime(day, dusk = 0) {
+    if (Math.abs(day - lastDay) < 0.004) return; lastDay = day;
+    sky.material.color.copy(DAY.night).lerp(DAY.top, day).lerp(DAY.dusk, dusk * 0.55);
+    sun.material.opacity = day; sun.visible = day > 0.05;
+    stars.material.opacity = Math.max(0, 1 - day * 1.6); stars.visible = day < 0.6;
+    moonSpr.material.opacity = Math.max(0, 1 - day * 1.4);
+    cloudM.color.setScalar(0.25 + 0.75 * day).lerp(DAY.dusk, dusk * 0.35);
+    const night = day < 0.45;
+    pools.visible = night; haloPts.visible = night;
+    const glow = Math.max(0, 1 - day * 1.8);
+    litT.emissive.setRGB(0.95 * glow, 0.66 * glow, 0.3 * glow); litD.emissive.setRGB(0.5 * glow, 0.35 * glow, 0.18 * glow);
+  }
+
   return {
-    colliders, houses, plotViews, sky, setFestive,
+    colliders, houses, plotViews, sky, setFestive, setTime,
     update(t, camPos) {
       sky.position.copy(camPos);
       for (const u of updaters) u(t);
@@ -619,13 +763,32 @@ export function buildWorld(scene) {
   };
 }
 
-// ---------- oshxona binosi (tashqi) ----------
+// ---------- biznes binosi (tashqi): osh markazi, kafe, restoran ----------
+// ochiladigan ikki tavaqali eshik (pivot — chetida)
+function makeDoors(parent, z, w = 2.4, h = 3.0, color = 0xb07040, dir = 1) {
+  const leaves = [];
+  for (const s of [-1, 1]) {
+    const piv = new THREE.Group(); piv.position.set(s * w / 2, 0, z); parent.add(piv);
+    const leaf = new THREE.Mesh(RB(w / 2 - 0.04, h, 0.12, 0.05), new THREE.MeshLambertMaterial({ map: TEX.wood, color }));
+    leaf.position.set(-s * (w / 4), h / 2, 0); piv.add(leaf);
+    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), M.metal); knob.position.set(-s * (w / 2 - 0.25), h * 0.5, 0.1); piv.add(knob);
+    piv.userData.dyn = true; leaves.push({ piv, s });
+  }
+  let cur = 0;
+  return (target, dt = 0.016) => {                 // 0 yopiq ... 1 ochiq
+    cur += (target - cur) * Math.min(1, dt * 7);
+    for (const l of leaves) l.piv.rotation.y = l.s * cur * 1.45 * dir;
+  };
+}
 function makePlotView(scene, p, colliders) {
   const g = new THREE.Group(); g.position.set(p.x, 0, p.z); g.rotation.y = p.f > 0 ? 0 : Math.PI;
   scene.add(g);
   const col = { x0: p.x - 7, x1: p.x + 7, z0: p.z - 6, z1: p.z + 6, off: false };
   colliders.push(col);
-  let built = null, signMesh = null, lastKey = '', lastK = null;
+  const extra = [0, 1, 2, 3].map(() => { const c = { x0: 99999, x1: 99999, z0: 99999, z1: 99999 }; colliders.push(c); return c; });
+  const F = p.f > 0 ? 1 : -1;
+  const setExtra = (i, lx, lz, w, d) => Object.assign(extra[i], { x0: p.x + lx * F - w / 2, x1: p.x + lx * F + w / 2, z0: p.z + lz * F - d / 2, z1: p.z + lz * F + d / 2 });
+  let built = null, lastKey = '', lastK = null, doorFn = null;
 
   function empty() {
     const lot = new THREE.Group();
@@ -636,68 +799,114 @@ function makePlotView(scene, p, colliders) {
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.6), M.dark); post.position.set(0, 0.8, 5.45); lot.add(post);
     return lot;
   }
+  const mesh = (geo, mat, x, y, z, parent, shadow = false) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = shadow; parent.add(m); return m; };
 
   function building(k) {
-    const b = new THREE.Group();
-    const roofCol = { oshxona: 0x8b2e1e, kafe: 0x2e6fa8, restoran: 0x5b2a86 }[k.type];
-    const body = new THREE.Mesh(new THREE.BoxGeometry(14, 6, 12), M.plaster); body.position.y = 3; body.castShadow = true; body.receiveShadow = true; b.add(body);
-    const plinth = new THREE.Mesh(new THREE.BoxGeometry(14.3, 0.6, 12.3), M.brick); plinth.position.y = 0.3; b.add(plinth);
-    const band = new THREE.Mesh(new THREE.BoxGeometry(14.3, 0.9, 12.3), M.tile); band.position.y = 5.45; b.add(band);
+    const b = new THREE.Group(), T = k.type, bz = k.up?.bezak || 1;
+    const roofCol = { oshxona: 0xc0392b, kafe: 0x1fb5a8, restoran: 0x7b3fb0 }[T];
+    const wallM = T === 'kafe' ? new THREE.MeshLambertMaterial({ color: 0xf4fbf8 }) : T === 'restoran' ? new THREE.MeshLambertMaterial({ color: 0xfff1dc }) : M.plaster;
+    const trimM = T === 'kafe' ? new THREE.MeshLambertMaterial({ map: TEX.tileTeal }) : T === 'restoran' ? new THREE.MeshLambertMaterial({ map: TEX.tileRed }) : M.tile;
+    const roofM = new THREE.MeshLambertMaterial({ color: roofCol });
+    mesh(RB(14, 6, 12, 0.5, 3), wallM, 0, 3, 0, b, true).receiveShadow = true;
+    mesh(RB(14.4, 0.7, 12.4, 0.3), M.brick, 0, 0.35, 0, b);
+    mesh(RB(14.4, 0.9, 12.4, 0.35), trimM, 0, 5.45, 0, b);
     const fl = k.up?.qavat || 1, topY = 6 + (fl - 1) * 5;
     for (let f = 2; f <= fl; f++) {                    // yuqori qavatlar
       const y0 = 6 + (f - 2) * 5;
-      const up = new THREE.Mesh(new THREE.BoxGeometry(13.6, 5, 11.6), M.plaster); up.position.y = y0 + 2.5; up.castShadow = true; b.add(up);
-      const ub = new THREE.Mesh(new THREE.BoxGeometry(13.9, 0.6, 11.9), M.tile); ub.position.y = y0 + 4.6; b.add(ub);
+      mesh(RB(13.6, 5, 11.6, 0.45, 3), wallM, 0, y0 + 2.5, 0, b, true);
+      mesh(RB(13.9, 0.6, 11.9, 0.25), trimM, 0, y0 + 4.6, 0, b);
       for (const wx of [-4.6, -1.5, 1.5, 4.6]) {
-        const wf = new THREE.Mesh(new THREE.ShapeGeometry(pointedArch(2.0, 2.9)), M.tile); wf.position.set(wx, y0 + 0.9, 5.82); b.add(wf);
-        const w = new THREE.Mesh(new THREE.ShapeGeometry(pointedArch(1.6, 2.5)), M.lit); w.position.set(wx, y0 + 1.05, 5.84); b.add(w);
+        mesh(new THREE.ShapeGeometry(pointedArch(2.0, 2.9)), trimM, wx, y0 + 0.9, 5.82, b);
+        mesh(new THREE.ShapeGeometry(pointedArch(1.6, 2.5)), M.lit, wx, y0 + 1.05, 5.84, b);
       }
-      const bal = new THREE.Mesh(new THREE.BoxGeometry(13, 0.15, 1.2), M.wood); bal.position.set(0, y0 + 0.05, 6.4); b.add(bal);
-      for (let r = -6; r <= 6; r += 0.75) { const pst = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.9, 6), M.wood); pst.position.set(r, y0 + 0.55, 6.95); b.add(pst); }
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(13, 0.08, 0.1), M.wood); rail.position.set(0, y0 + 1.0, 6.95); b.add(rail);
+      mesh(RB(13, 0.18, 1.3, 0.08), M.wood, 0, y0 + 0.05, 6.45, b);
+      for (let r = -6; r <= 6; r += 0.75) mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.9, 8), M.wood, r, y0 + 0.55, 7.0, b);
+      mesh(RB(13, 0.1, 0.14, 0.04), M.wood, 0, y0 + 1.0, 7.0, b);
+      if (bz >= 3) for (const wx of [-4.6, -1.5, 1.5, 4.6]) {     // gul qutilari
+        mesh(RB(1.4, 0.3, 0.4, 0.1), M.wood, wx, y0 + 0.75, 6.6, b);
+        for (let q = -1; q <= 1; q++) mesh(new THREE.IcosahedronGeometry(0.17, 1), new THREE.MeshLambertMaterial({ color: [0xf06292, 0xffd54f, 0xffffff][q + 1] }), wx + q * 0.4, y0 + 1.0, 6.6, b);
+      }
     }
-    const corn = new THREE.Mesh(new THREE.BoxGeometry(fl > 1 ? 14.2 : 14.8, 0.35, fl > 1 ? 12.2 : 12.8), new THREE.MeshLambertMaterial({ color: roofCol })); corn.position.y = topY + 0.05; b.add(corn);
-    // eshik va arkali derazalar
-    const frame = new THREE.Mesh(new THREE.ShapeGeometry(pointedArch(3.2, 4)), M.tile); frame.position.set(0, 0, 6.02); b.add(frame);
-    const door = new THREE.Mesh(new THREE.ShapeGeometry(pointedArch(2.4, 3.4)), new THREE.MeshLambertMaterial({ map: TEX.wood, color: 0xb07040 })); door.position.set(0, 0, 6.04); b.add(door);
-    const dline = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 3.2), M.dark); dline.position.set(0, 1.6, 6.05); b.add(dline);
-    for (const wx of [-4.4, 4.4]) {
-      const wf = new THREE.Mesh(new THREE.ShapeGeometry(archShape(2.8, 3.5)), M.tile); wf.position.set(wx, 1.0, 6.02); b.add(wf);
-      const w = new THREE.Mesh(new THREE.ShapeGeometry(archShape(2.3, 3.1)), M.lit); w.position.set(wx, 1.2, 6.04); b.add(w);
-      const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 2.6), M.dark); bar.position.set(wx, 2.4, 6.05); b.add(bar);
+    mesh(RB(fl > 1 ? 14.2 : 14.8, 0.45, fl > 1 ? 12.2 : 12.8, 0.2), roofM, 0, topY + 0.05, 0, b);
+    // eshik (ochiladi)
+    mesh(new THREE.ShapeGeometry(pointedArch(3.4, 4.1)), trimM, 0, 0, 6.02, b);
+    mesh(new THREE.PlaneGeometry(2.6, 3.1), new THREE.MeshBasicMaterial({ color: 0x3a2414 }), 0, 1.55, 6.01, b);
+    doorFn = makeDoors(b, 6.1);
+    // old tomon: turiga qarab
+    if (T === 'kafe') {
+      for (const wx of [-4.5, 4.5]) {                   // keng vitrina oynalari
+        mesh(RB(3.8, 3.0, 0.2, 0.12), new THREE.MeshLambertMaterial({ color: 0xffffff }), wx, 2.2, 6.02, b);
+        mesh(RB(3.5, 2.7, 0.22, 0.1), M.lit, wx, 2.2, 6.03, b);
+      }
+      const aw = mesh(new THREE.PlaneGeometry(13.6, 2.4), new THREE.MeshLambertMaterial({ map: TEX.awning[3], side: THREE.DoubleSide }), 0, 4.2, 7.0, b);
+      aw.rotation.x = -Math.PI / 2 + 0.45;
+      for (const [i, ox] of [[0, -5.6], [1, 5.6]]) {   // tashqaridagi soyabonli stollar
+        const t = new THREE.Group(); t.position.set(ox, 0, 8.8); b.add(t);
+        mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.06, 20), M.wood, 0, 0.78, 0, t);
+        mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.4, 8), M.dark, 0, 1.2, 0, t);
+        mesh(new THREE.ConeGeometry(1.4, 0.6, 16, 1, true), new THREE.MeshLambertMaterial({ color: i ? 0xf06292 : 0x1fb5a8, side: THREE.DoubleSide }), 0, 2.45, 0, t);
+        for (const s of [-1, 1]) mesh(RB(0.45, 0.45, 0.45, 0.12), new THREE.MeshLambertMaterial({ color: 0xffffff }), s * 0.85, 0.42, 0, t);
+        setExtra(i, ox, 8.8, 2.6, 1.4);
+      }
+    } else if (T === 'restoran') {
+      for (const wx of [-4.4, 4.4]) {
+        mesh(new THREE.ShapeGeometry(pointedArch(2.8, 3.6)), trimM, wx, 1.0, 6.02, b);
+        mesh(new THREE.ShapeGeometry(pointedArch(2.3, 3.2)), M.lit, wx, 1.2, 6.04, b);
+      }
+      const goldM = new THREE.MeshStandardMaterial({ color: 0xd4a640, metalness: 0.5, roughness: 0.35 });
+      for (const cx of [-5.8, -2.4, 2.4, 5.8]) {        // ustunli ayvon
+        mesh(new THREE.CylinderGeometry(0.3, 0.36, 4.6, 16), new THREE.MeshLambertMaterial({ color: 0xfff6e6 }), cx, 2.3, 8.6, b, true);
+        mesh(new THREE.CylinderGeometry(0.5, 0.36, 0.35, 16), goldM, cx, 4.5, 8.6, b);
+      }
+      mesh(RB(13.2, 0.5, 3.6, 0.2), roofM, 0, 4.85, 7.9, b, true);
+      mesh(new THREE.PlaneGeometry(2.4, 6).rotateX(-Math.PI / 2), M.ground(0xb02030), 0, 0.09, 9.2, b);
+      setExtra(0, -5.8, 8.6, 0.8, 0.8); setExtra(1, 5.8, 8.6, 0.8, 0.8); setExtra(2, -2.4, 8.6, 0.8, 0.8); setExtra(3, 2.4, 8.6, 0.8, 0.8);
+      const dm = mesh(new THREE.SphereGeometry(2.8, 28, 14, 0, 7, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x2fb5c9, roughness: 0.35 }), 0, topY + 0.25, 0, b);
+      dm.scale.y = 1.35;
+      mesh(new THREE.CylinderGeometry(2.9, 2.9, 0.7, 28), trimM, 0, topY + 0.3, 0, b);
+    } else {
+      for (const wx of [-4.4, 4.4]) {
+        mesh(new THREE.ShapeGeometry(archShape(2.8, 3.5)), trimM, wx, 1.0, 6.02, b);
+        mesh(new THREE.ShapeGeometry(archShape(2.3, 3.1)), M.lit, wx, 1.2, 6.04, b);
+      }
+      for (const cx of [-2.4, 2.4]) {                   // ayvon
+        mesh(new THREE.CylinderGeometry(0.18, 0.22, 3.9, 14), M.wood, cx, 1.95, 8.2, b, true);
+        mesh(new THREE.CylinderGeometry(0.32, 0.2, 0.3, 14), trimM, cx, 3.8, 8.2, b);
+      }
+      mesh(RB(6.2, 0.3, 2.9, 0.12), roofM, 0, 4.05, 7.2, b, true);
+      setExtra(0, -2.4, 8.2, 0.5, 0.5); setExtra(1, 2.4, 8.2, 0.5, 0.5);
     }
-    // ayvon (ustunlar va soyabon)
-    for (const cx of [-2.4, 2.4]) {
-      const c = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 3.9, 12), M.wood); c.position.set(cx, 1.95, 8.2); c.castShadow = true; b.add(c);
-      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.18, 0.3, 12), M.tile); cap.position.set(cx, 3.8, 8.2); b.add(cap);
+    if (bz >= 3) for (const wx of [-4.4, 4.4]) {                 // 1-qavat gul qutilari
+      mesh(RB(2.4, 0.35, 0.45, 0.12), M.wood, wx, 0.85, 6.3, b);
+      for (let q = -2; q <= 2; q++) mesh(new THREE.IcosahedronGeometry(0.18, 1), new THREE.MeshLambertMaterial({ color: [0xf06292, 0xffd54f, 0xffffff, 0xe8402f, 0x8e5bc4][q + 2] }), wx + q * 0.42, 1.12, 6.3, b);
     }
-    const awn = new THREE.Mesh(new THREE.BoxGeometry(6, 0.22, 2.8), new THREE.MeshLambertMaterial({ color: roofCol })); awn.position.set(0, 4.05, 7.2); awn.castShadow = true; b.add(awn);
+    if (bz >= 5) {                                              // chiroqchalar shodasi
+      for (let i = 0; i < 16; i++) mesh(new THREE.SphereGeometry(0.1, 8, 6), new THREE.MeshBasicMaterial({ color: [0xffd54f, 0xff6b6b, 0x7fd0ff, 0x8de07a][i % 4] }), -7 + i * 0.93, 5.0 - Math.sin(i / 15 * Math.PI) * 0.4, 6.35, b);
+    }
     // fonar
     for (const lx of [-1.9, 1.9]) {
-      const l = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.12, 0.45, 8), M.lit); l.position.set(lx, 3.0, 6.2); b.add(l);
+      mesh(new THREE.CylinderGeometry(0.16, 0.12, 0.45, 10), M.lit, lx, 3.3, 6.25, b);
       const h = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, color: 0xffc070, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-      h.scale.set(2.4, 2.4, 1); h.position.copy(l.position); b.add(h);
+      h.scale.set(2.4, 2.4, 1); h.position.set(lx, 3.3, 6.25); b.add(h);
     }
     // peshlavha
-    const name = { oshxona: 'Osh markazi', kafe: 'Kafe', restoran: 'Restoran' }[k.type];
-    signMesh = new THREE.Mesh(new THREE.PlaneGeometry(7.4, 1.3),
-      new THREE.MeshBasicMaterial({ map: textTexture([name, k.names.join(' · ')], { bg: '#3b1f0e', fg: '#f6d27a', border: '#c9a66b' }) }));
-    signMesh.position.set(0, 4.85, 6.08); b.add(signMesh);
-    // sharqona tom ustidagi gumbaz (restoran) yoki parapet
-    if (k.type === 'restoran') {
-      const dm = new THREE.Mesh(new THREE.SphereGeometry(2.5, 24, 12, 0, 7, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x2fb5c9, roughness: 0.35 }));
-      dm.scale.y = 1.3; dm.position.y = topY + 0.2; b.add(dm);
-    }
+    const name = { oshxona: 'Osh markazi', kafe: 'Kafe', restoran: 'Restoran' }[T];
+    const sg = mesh(RB(7.8, 1.5, 0.2, 0.15), roofM, 0, 4.85, 6.12, b);
+    sg.position.z = T === 'restoran' ? 6.12 : 6.12;
+    mesh(new THREE.PlaneGeometry(7.4, 1.3), new THREE.MeshBasicMaterial({ map: textTexture([name, k.names.join(' · ')], { bg: '#3b1f0e', fg: '#f6d27a', border: '#c9a66b', radius: 18 }) }), 0, 4.85, 6.24, b);
+    toonify(b);
+    mergeStatic(b);
     return b;
   }
   // Damas to'xtash joyi (bino yonida)
-  const cosF = p.f > 0 ? 1 : -1;
-  const park = { x: p.x + 9.6 * cosF, z: p.z + 3.5 * cosF, ry: p.f > 0 ? -Math.PI / 2 : Math.PI / 2 };
+  const park = { x: p.x + 9.6 * F, z: p.z + 3.5 * F, ry: p.f > 0 ? -Math.PI / 2 : Math.PI / 2 };
   const dcol = { x0: 99999, x1: 99999, z0: 99999, z1: 99999 }; colliders.push(dcol);
   let crown = null;
 
   return {
     plot: p, group: g, park, damas: null,
+    door: { x: p.door.x, z: p.door.z },
+    setDoor(v, dt) { if (doorFn) doorFn(v, dt); },
     parkDamas() {                    // Damasni joyiga qo'yish (to'qnashuv bilan)
       if (!this.damas) return;
       this.damas.position.set(park.x, 0, park.z); this.damas.rotation.y = park.ry;
@@ -718,14 +927,14 @@ function makePlotView(scene, p, colliders) {
       lastK = k;
       if (k && !this.damas) { this.damas = makeDamas(); scene.add(this.damas); this.parkDamas(); }
       if (!k && this.damas) { scene.remove(this.damas); this.damas = null; this.freeDamas(); }
-      const key = k ? `${k.type}|${k.names.join(',')}|${k.up?.qavat || 1}` : 'empty';
+      const key = k ? `${k.type}|${k.names.join(',')}|${k.up?.qavat || 1}|${(k.up?.bezak || 1) >= 3}|${(k.up?.bezak || 1) >= 5}` : 'empty';
       if (key === lastKey) return; lastKey = key;
       if (built) { g.remove(built); }
+      extra.forEach((c) => Object.assign(c, { x0: 99999, x1: 99999, z0: 99999, z1: 99999 }));
+      doorFn = null;
       built = k ? building(k) : empty();
       g.add(built);
-      col.off = !k; col.x0 = k ? p.x - 7 : 0; col.x1 = k ? p.x + 7 : 0;
-      if (!k) { col.x0 = col.x1 = col.z0 = col.z1 = 99999; } else { col.z0 = p.z - 6; col.z1 = p.z + 6; }
-      // ayvon ustunlari
+      if (!k) { col.x0 = col.x1 = col.z0 = col.z1 = 99999; } else { col.x0 = p.x - 7; col.x1 = p.x + 7; col.z0 = p.z - 6; col.z1 = p.z + 6; }
     },
   };
 }
@@ -765,7 +974,7 @@ export function buildInterior(scene, plotIndex, type = 'oshxona') {
   const { hx, hz, h } = ROOM;
   const lm = (c) => new THREE.MeshLambertMaterial({ color: c });
   const sm = (c, r = 0.5, mt = 0) => new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: mt });
-  const box = (w, hh, d, m, x, y, z, parent) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, hh, d), m); b.position.set(x, y, z); b.castShadow = true; b.receiveShadow = true; parent.add(b); return b; };
+  const box = (w, hh, d, m, x, y, z, parent) => { const b = new THREE.Mesh(RB(w, hh, d, 0.05), m); b.position.set(x, y, z); b.castShadow = true; b.receiveShadow = true; parent.add(b); return b; };
   const texM = (t, rep, extra = {}) => { const m = new THREE.MeshLambertMaterial({ map: t.clone(), ...extra }); m.map.wrapS = m.map.wrapT = THREE.RepeatWrapping; m.map.repeat.set(rep[0], rep[1]); m.map.needsUpdate = true; return m; };
   const gold = sm(ST.gold, 0.35, 0.55), wallM = lm(ST.wall), tileM = new THREE.MeshLambertMaterial({ map: ST.tile });
   const chairM = lm(ST.chair), legM = lm(0x6a4022), clothM = lm(ST.cloth);
@@ -832,7 +1041,7 @@ export function buildInterior(scene, plotIndex, type = 'oshxona') {
   // ---- stol va 4 ta stul ----
   const tables = [];
   function table(parent, f, tx, tz, kind, lux = false) {
-    const t = new THREE.Group(); t.position.set(tx, 0, tz); parent.add(t);
+    const t = new THREE.Group(); t.position.set(tx, 0, tz); t.userData.dyn = true; parent.add(t);
     box(2.2, 0.08, 1.25, chairM, 0, 0.76, 0, t);
     box(2.3, 0.02, 1.35, lux ? lm(0xfff0c8) : clothM, 0, 0.81, 0, t);
     for (const lx of [-0.95, 0.95]) for (const lz of [-0.5, 0.5]) box(0.08, 0.76, 0.08, legM, lx, 0.38, lz, t);
@@ -859,8 +1068,8 @@ export function buildInterior(scene, plotIndex, type = 'oshxona') {
   wall(1, F1, 'x', -hz, ANNEX_X, hx); wall(1, F1, 'x', hz, ANNEX_X, hx, [[-1.3, 1.3]]);
   wall(1, F1, 'z', hx, -hz, hz); wall(1, F1, 'z', -hx, -hz, hz, [[0.2, 2.6]]); wall(1, F1, 'z', ANNEX_X, -hz, hz);
   windows(F1, 1, [-6.4, 6.3]); windows(F1, -1, [-6.4, 6.3]);
-  const door = new THREE.Mesh(new THREE.ShapeGeometry(pointedArch(2.6, 3.2)), new THREE.MeshLambertMaterial({ map: TEX.wood, color: 0xd09060, side: THREE.DoubleSide }));
-  door.position.set(0, 0, hz - 0.17); door.rotation.y = Math.PI; F1.add(door);
+  const doorBg = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 3.2), new THREE.MeshBasicMaterial({ color: 0x8fd0ff })); doorBg.position.set(0, 1.6, hz + 0.05); doorBg.rotation.y = Math.PI; F1.add(doorBg);
+  const doorFn = makeDoors(F1, hz - 0.2, 2.6, 3.1, 0xd09060, -1);
   const ex = sign('Chiqish', 1.8, 0, 3.7, hz - 0.18, Math.PI, F1, '#2fb05a');
   for (const cz of [-3.8, 3.7]) {                    // chap devor bo'yidagi ustunlar
     const c = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.38, h, 20), sm(0xfff3dc, 0.45)); c.position.set(-(hx - 0.9), h / 2, cz); c.castShadow = true; F1.add(c);
@@ -880,7 +1089,7 @@ export function buildInterior(scene, plotIndex, type = 'oshxona') {
   const qozonG = new THREE.LatheGeometry([0, 0.35, 0.7, 1.0, 1.2, 1.3, 1.34].map((r, i) => new THREE.Vector2(r, i * 0.14)), 36);
   const qozonM = sm(0x2a2a2e, 0.35, 0.7); qozonM.side = THREE.DoubleSide;
   const qozons = QOZON_X.map((qx) => {
-    const q = new THREE.Group(); q.position.set(qx, 0, STOVE_Z); F1.add(q);
+    const q = new THREE.Group(); q.position.set(qx, 0, STOVE_Z); q.userData.dyn = true; F1.add(q);
     let osh, fires;
     if (type === 'kafe') {                            // tandir
       const tand = new THREE.Mesh(new THREE.SphereGeometry(1.0, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2), lm(0xd9a46a)); tand.position.y = 1.1; tand.scale.y = 1.25; q.add(tand);
@@ -920,7 +1129,7 @@ export function buildInterior(scene, plotIndex, type = 'oshxona') {
   box(2.8, 0.08, 1.1, sm(0xf6efe4, 0.25), 8.2, 1.14, 6.8, F1);
   box(0.5, 0.35, 0.4, sm(0x2b2b30, 0.4), 8.2, 1.36, 6.8, F1);
   C(1, 6.8, 9.6, 6.3, 7.3);
-  for (const [px, pz] of [[-12, 8], [-2.3, 8.3], [2.3, 8.3], [12, 8]]) plant(F1, px, pz);
+  for (const [px, pz] of [[-12, 8], [-4.6, 8.3], [4.6, 8.3], [12, 8]]) plant(F1, px, pz);
   stairs(F1, 1, 1);
   sign('2-qavat ↑', 1.6, 12.84, 4.6, 3.6, -Math.PI / 2, F1, '#d4a640');
   HALL_SLOTS.forEach(([tx, tz]) => table(F1, 1, tx, tz, 'hall'));
@@ -933,6 +1142,7 @@ export function buildInterior(scene, plotIndex, type = 'oshxona') {
     sign(r, 1.9, -16.83, 3.6, z, Math.PI / 2, F1, '#2f80e0');
     const panel = box(0.12, 3.1, 1.4, new THREE.MeshLambertMaterial({ map: TEX.wood, color: 0x9a6a40 }), -17, 1.55, z, F1);
     const lock = sign('Yopiq', 1.0, -16.9, 2.0, z, Math.PI / 2, F1, '#b02030');
+    panel.userData.dyn = true; lock.userData.dyn = true;
     return { panel, lock, col: { x0: -17.2 + O.x, x1: -16.8 + O.x, z0: z - 0.75 + O.z, z1: z + 0.75 + O.z } };
   });
   // ombor: qoplar, yashiklar, javon
@@ -951,6 +1161,27 @@ export function buildInterior(scene, plotIndex, type = 'oshxona') {
   for (let k = 0; k < 2; k++) { box(0.8, 0.9, 0.5, lm(0xffffff), -21.5 + k * 1.2, 0.45, 8.5, F1); box(0.8, 0.8, 0.04, sm(0xbfe6ff, 0.05, 0.6), -21.5 + k * 1.2, 1.8, 8.75, F1); }
   for (let k = 0; k < 2; k++) box(0.06, 2.2, 1.6, lm(0xa8c8e0), -21 + k * 1.6, 1.1, 5.3, F1);
   C(1, -23, -20.6, -9, -7.4); C(1, -22.6, -18.4, -5.6, -5.0); C(1, -23, -20.2, 1.6, 2.9);
+
+  // ---- bezak (Bezak kuchaytirishi oshgan sari zal chiroyliroq bo'ladi) ----
+  const decor = {};
+  for (const lv of [2, 3, 4, 5]) { decor[lv] = new THREE.Group(); decor[lv].userData.dyn = true; decor[lv].visible = false; F1.add(decor[lv]); }
+  for (const sx of [-1, 1]) for (const wz of [-4.0, -1.3, 1.4, 4.1]) {           // 2: devordagi naqshli laganlar
+    const pl = new THREE.Mesh(new THREE.CircleGeometry(0.55, 28), new THREE.MeshLambertMaterial({ map: ST.tile }));
+    pl.position.set(sx * (hx - 0.17), 3.7, wz + (sx > 0 ? 0 : 0.3)); pl.rotation.y = -sx * Math.PI / 2; decor[2].add(pl);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.56, 0.05, 6, 28), gold); rim.position.copy(pl.position); rim.rotation.y = pl.rotation.y; decor[2].add(rim);
+  }
+  for (const [x, z, ry] of [[-hx + 0.18, -2.6, Math.PI / 2], [hx - 0.18, -2.6, -Math.PI / 2], [-hx + 0.18, 2.75, Math.PI / 2], [hx - 0.18, 2.75, -Math.PI / 2]]) {   // 3: suzanilar
+    const sz = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 3.0), new THREE.MeshLambertMaterial({ map: TEX.suzani })); sz.position.set(x, 3.2, z); sz.rotation.y = ry; decor[3].add(sz);
+  }
+  for (let i = 0; i < 9; i++) {                                                     // 4: rangli fonuslar
+    const x = -8 + i * 2, col = [0xf06292, 0xffd54f, 0x4fc3f7, 0x81c784][i % 4];
+    const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.28, 14, 10).scale(1, 1.3, 1), new THREE.MeshBasicMaterial({ color: col })); lamp.position.set(x, h - 1.5, 6.4); decor[4].add(lamp);
+    const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 1.2), M.dark); cord.position.set(x, h - 0.8, 6.4); decor[4].add(cord);
+  }
+  for (const [px, pz] of [[-11.5, -3.5], [11.5, -3.5], [-7, 8.2], [7, 8.2]]) plant(decor[4], px, pz, 1.3);
+  const runner = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 12).rotateX(-Math.PI / 2), Object.assign(new THREE.MeshLambertMaterial({ map: TEX.carpet }), { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }));
+  runner.position.set(0, 0.02, 2.7); decor[5].add(runner);                          // 5: gilam yo'lak va oltin ramkalar
+  for (const fx of [-6, 6]) { const fr = new THREE.Mesh(RB(2.6, 1.8, 0.1, 0.05), gold); fr.position.set(fx, 3.4, -hz + 0.25); decor[5].add(fr); const pic = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 1.4), new THREE.MeshBasicMaterial({ map: TEX.night })); pic.position.set(fx, 3.4, -hz + 0.31); decor[5].add(pic); }
 
   // =================== 2-QAVAT (VIP) ===================
   const F2 = new THREE.Group(); F2.position.y = FLOOR_H; root.add(F2);
@@ -1000,8 +1231,13 @@ export function buildInterior(scene, plotIndex, type = 'oshxona') {
   }
   tables.forEach((tb) => tb.seats.forEach((s) => Object.assign(s, seatPath(tb, s))));
 
+  toonify(root);
+  for (const F of [F1, F2, F3]) { const vis = F.visible; F.visible = true; mergeStatic(F); F.visible = vis; }
+  for (const lv of [2, 3, 4, 5]) { const v = decor[lv].visible; decor[lv].visible = true; mergeStatic(decor[lv]); decor[lv].visible = v; }
+
   return {
     origin: O, group: root, type, tables, qozons, roomDoors,
+    setDoor(v, dt) { doorFn(v, dt); },
     floors: [F1, F2, F3],
     qozon: new THREE.Vector3(O.x, O.y, O.z + STOVE_Z + 1.55),            // oshpaz turadigan joy
     kassa: new THREE.Vector3(O.x + 8.2, O.y, O.z + 5.9),
@@ -1033,6 +1269,7 @@ export function buildInterior(scene, plotIndex, type = 'oshxona') {
       qozons.forEach((q, i) => { q.group.visible = i < qozonCount(k.up.qozon); });
       F2.visible = fl >= 2; F3.visible = fl >= 3;
       roomDoors.forEach((d, i) => { const open = (k.up.xona || 1) >= i + 1; d.panel.visible = !open; d.lock.visible = !open; });
+      for (const lv of [2, 3, 4, 5]) decor[lv].visible = (k.up.bezak || 1) >= lv;
     },
   };
 }
@@ -1054,27 +1291,22 @@ export function reversePath(path) {
   return rev.map((p, i) => ({ ...p, tp: i > 0 ? !!rev[i - 1].tp : false }));
 }
 
-// ---------- Damas (yetkazib berish mashinasi) ----------
-export function makeDamas(color = 0xf4f4f4) {
-  const g = new THREE.Group();
-  const s = new THREE.Shape();
-  s.moveTo(1.7, 0.35); s.lineTo(1.75, 0.8); s.quadraticCurveTo(1.72, 1.15, 1.35, 1.3);
-  s.lineTo(1.05, 1.9); s.quadraticCurveTo(0.95, 2.02, 0.7, 2.02); s.lineTo(-1.6, 2.02);
-  s.quadraticCurveTo(-1.75, 2.0, -1.75, 1.8); s.lineTo(-1.75, 0.35); s.lineTo(1.7, 0.35);
-  const body = new THREE.Mesh(new THREE.ExtrudeGeometry(s, { depth: 1.5, bevelEnabled: true, bevelThickness: 0.08, bevelSize: 0.08, bevelSegments: 3 }),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.2 }));
-  body.position.z = -0.75; body.castShadow = true; g.add(body);
-  const glassM = new THREE.MeshStandardMaterial({ color: 0x2a3a52, roughness: 0.1, metalness: 0.6 });
-  const ws = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.62), glassM); ws.position.set(1.22, 1.62, 0); ws.rotation.order = 'YXZ'; ws.rotation.set(-0.45, Math.PI / 2, 0); g.add(ws);
-  for (const sz of [0.84, -0.84]) {
-    const sw = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.55), glassM); sw.position.set(0.55, 1.6, sz); sw.rotation.y = sz > 0 ? 0 : Math.PI; g.add(sw);
-    const stripe = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 0.12), new THREE.MeshBasicMaterial({ color: 0x2f80e0 })); stripe.position.set(-0.05, 0.95, sz * 1.01); stripe.rotation.y = sz > 0 ? 0 : Math.PI; g.add(stripe);
-  }
-  const wg = new THREE.CylinderGeometry(0.32, 0.32, 0.24, 16).rotateX(Math.PI / 2);
-  const wm = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 });
-  for (const wx of [1.15, -1.15]) for (const wz of [0.72, -0.72]) { const w = new THREE.Mesh(wg, wm); w.position.set(wx, 0.32, wz); g.add(w); }
-  for (const z of [0.5, -0.5]) { const hl = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), new THREE.MeshBasicMaterial({ color: 0xfff6c8 })); hl.scale.set(0.5, 1, 1.2); hl.position.set(1.77, 0.75, z); g.add(hl); }
+// ---------- Damas (yetkazib berish mashinasi, multfilm uslubida) ----------
+export function makeDamas(color = 0xf7f7f7) {
+  const g = new THREE.Group(), parts = new THREE.Group(); g.add(parts);
+  const add = (geo, c, x, y, z) => { const m = new THREE.Mesh(geo, lam(c)); m.position.set(x, y, z); m.castShadow = true; parts.add(m); return m; };
+  add(RB(3.1, 1.55, 1.62, 0.38, 3), color, -0.25, 1.22, 0);                // asosiy kuzov
+  add(RB(0.9, 0.9, 1.6, 0.35, 3), color, 1.3, 0.9, 0);                     // tumshuq
+  add(RB(0.5, 0.62, 1.5, 0.22, 2), 0x22314a, 1.18, 1.55, 0);               // old oyna
+  add(RB(1.0, 0.55, 1.68, 0.18, 2), 0x22314a, 0.55, 1.6, 0);               // yon oynalar
+  add(RB(1.6, 0.45, 1.68, 0.16, 2), 0x22314a, -0.9, 1.62, 0);
+  add(RB(3.2, 0.14, 1.66, 0.06, 2), 0x2f80e0, -0.2, 1.02, 0);              // ko'k chiziq
+  add(RB(0.3, 0.28, 1.5, 0.1), 0x55595f, 1.8, 0.58, 0); add(RB(0.3, 0.28, 1.5, 0.1), 0x55595f, -1.85, 0.58, 0);
+  for (const z of [0.5, -0.5]) { add(new THREE.SphereGeometry(0.14, 12, 10).scale(0.6, 1, 1), 0xfff8d6, 1.76, 0.95, z); add(new THREE.SphereGeometry(0.12, 12, 10).scale(0.6, 1, 1), 0xff3b2f, -1.83, 1.0, z); }
+  const wg = new THREE.CylinderGeometry(0.36, 0.36, 0.3, 18).rotateX(Math.PI / 2), hub = new THREE.CylinderGeometry(0.19, 0.19, 0.32, 12).rotateX(Math.PI / 2);
+  for (const wx of [1.15, -1.2]) for (const wz of [0.7, -0.7]) { add(wg, 0x1d1d1f, wx, 0.36, wz); add(hub, 0xf2f2f2, wx, 0.36, wz); }
+  mergeChildrenVC(parts);
   const lbl = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.4), new THREE.MeshBasicMaterial({ map: textTexture('Osh yetkazish', { bg: '#ffffff', fg: '#2f80e0', w: 512, h: 128, font: 'bold 60px sans-serif' }) }));
-  for (const sz of [0.86, -0.86]) { const l = lbl.clone(); l.position.set(-0.6, 1.5, sz); l.rotation.y = sz > 0 ? 0 : Math.PI; g.add(l); }
-  return g;
+  for (const sz of [0.83, -0.83]) { const l = lbl.clone(); l.position.set(-0.6, 1.32, sz); l.rotation.y = sz > 0 ? 0 : Math.PI; g.add(l); }
+  return toonify(g);
 }

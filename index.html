@@ -5,10 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#161c33">
 <title>Osh markazi — 3D onlayn o'yin</title>
+<link rel="icon" type="image/png" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="manifest" href="manifest.webmanifest">
 <script type="importmap">
 { "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  "three": "./lib/three.module.min.js",
+  "three/addons/": "./lib/"
 } }
 </script>
 <style>
@@ -36,14 +39,19 @@ button{font:inherit;cursor:pointer;border:0}
 .rb{width:64px;height:64px;border-radius:50%;background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.6);color:#fff;font-size:12px}
 .rb.on{background:rgba(242,182,50,.75);color:#3b2410}
 #actBtn{min-width:120px;height:52px;border-radius:26px;background:#f2b632;color:#3b2410;border:2px solid #fff;font-weight:700;font-size:16px;padding:0 18px;margin-bottom:6px}
-#chatWrap{position:absolute;left:max(10px,env(safe-area-inset-left));top:120px;width:min(300px,60vw)}
-#chatLog{font-size:13px;max-height:120px;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;text-shadow:0 1px 2px #000}
+#chatWrap{position:absolute;left:max(10px,env(safe-area-inset-left));top:150px;width:min(280px,42vw);pointer-events:none}
+#chatRow{pointer-events:auto}
+#chatLog div{transition:opacity 1s}#chatLog div.old{opacity:0}
+#chatToggle{align-self:flex-start;color:#fff}
+#chatLog{pointer-events:none;font-size:13px;max-height:120px;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;text-shadow:0 1px 2px #000}
 #chatLog b{color:#f6d27a;font-weight:600}
-#chatRow{display:flex;gap:6px;margin-top:6px}
+#chatRow{display:none;gap:6px;margin-top:6px}#chatWrap.open #chatRow{display:flex}
 #chatIn{flex:1;min-width:0;background:rgba(0,0,0,.5);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:16px;padding:6px 12px;font:inherit;font-size:13px;user-select:text}
 #chatBtn{background:rgba(0,0,0,.5);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:16px;padding:0 12px;font-size:13px}
-#toasts{position:fixed;left:50%;bottom:110px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;z-index:30;pointer-events:none}
-.toast{background:rgba(15,20,40,.9);border:1px solid rgba(255,255,255,.25);border-radius:12px;padding:10px 16px;font-size:14px;pointer-events:auto;max-width:90vw;text-align:center}
+#toasts{position:fixed;left:50%;bottom:max(96px,calc(env(safe-area-inset-bottom) + 90px));transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;z-index:30;pointer-events:none}
+.toast{background:rgba(15,20,40,.88);border:1px solid rgba(255,255,255,.25);border-radius:12px;padding:8px 14px;font-size:13px;pointer-events:auto;max-width:min(460px,50vw);text-align:center;animation:tin .25s ease-out}
+.toast:has(button){max-width:min(480px,86vw);font-size:14px}
+@keyframes tin{from{opacity:0;transform:translateY(10px)}}
 .toast button{margin:8px 4px 0;padding:6px 14px;border-radius:14px;background:#f2b632;color:#3b2410;font-weight:600}
 .toast button.no{background:#444;color:#fff}
 #fade{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .35s;z-index:20}
@@ -78,25 +86,34 @@ select{font:inherit;padding:4px 8px;border-radius:8px;border:1px solid #c9a66b;b
 #loadTxt{margin-top:14px;font-size:13px;color:#cfc6e6;min-height:18px}
 /* intro */
 #intro{position:fixed;inset:0;z-index:15;pointer-events:none}
-.lb{position:absolute;left:0;right:0;height:11vh;background:#000}
+.lb{position:absolute;left:0;right:0;height:7vh;background:#000}
 #lbT{top:0}#lbB{bottom:0}
 #subtitle{position:absolute;left:50%;bottom:15vh;transform:translateX(-50%);background:rgba(0,0,0,.6);padding:8px 16px;border-radius:6px;font-size:18px;text-align:center;max-width:90vw}
 #skipBtn{position:absolute;right:16px;top:calc(11vh + 10px);pointer-events:auto;background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.6);border-radius:18px;padding:7px 16px}
-#muteIntro{position:absolute;left:16px;top:calc(11vh + 10px);pointer-events:auto;background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.6);border-radius:18px;padding:6px 12px;font-size:16px}
+#muteIntro{position:absolute;left:16px;top:calc(7vh + 10px);pointer-events:auto;background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.6);border-radius:18px;padding:6px 12px;font-size:16px}
 #prog{position:absolute;left:5%;right:5%;bottom:5vh;height:4px;background:rgba(255,255,255,.25);border-radius:2px}
 #prog i{display:block;height:100%;width:0;background:#e8b04b;border-radius:2px}
-@media (max-width:600px){#bossBtn{padding:7px 16px;font-size:14px}.pill{font-size:12px;padding:5px 10px}#chatWrap{top:150px}}
+@media (max-width:600px){#bossBtn{padding:7px 16px;font-size:14px}.pill{font-size:12px;padding:5px 10px}}
+@media (max-height:500px){#kpanel{top:auto;bottom:10px;left:auto;right:auto;left:50%;font-size:12px;min-width:180px;padding:6px 10px}#guide{top:48px}#chatWrap{top:118px}#chatLog{max-height:66px;font-size:12px}#start{overflow:auto;align-items:flex-start}#startBox{padding:10px 16px}#start #startLogo{width:54px;height:54px;border-radius:14px;margin:0}#startBox h1{font-size:24px}#startBox p{margin:0 0 8px;font-size:13px}#start #nameIn,#start #pinIn{padding:8px 12px;font-size:15px;margin-top:6px}#genderRow{margin-top:6px}#genderRow button{padding:7px}#startBtn{margin-top:8px;padding:10px}#replayBtn{margin-top:6px}}
+#pinIn{width:100%;margin-top:10px;padding:12px 16px;border-radius:12px;border:2px solid #c9a66b55;background:#fbf6ec;color:#2b1a0a;font-size:16px;user-select:text;text-align:center;letter-spacing:4px}
+#pinIn::placeholder{letter-spacing:0;font-size:14px}
+#loadTxt{margin-top:10px;font-size:13px;color:#ffb4a8;min-height:1em}
+#replayBtn{margin-top:12px;background:none;color:#cfc6e6;text-decoration:underline;font-size:14px}
+#startLogo{width:120px;height:120px;border-radius:28px;box-shadow:0 8px 30px rgba(0,0,0,.4);margin-bottom:8px}
 </style>
 </head>
 <body>
 <div id="start">
   <div id="startBox">
+    <img id="startLogo" src="icon.png" alt="">
     <h1>Osh markazi</h1>
     <p>Andijonda o'z oshxonangizni oching</p>
     <input id="nameIn" maxlength="16" placeholder="Ismingiz" autocomplete="off">
+    <input id="pinIn" maxlength="6" inputmode="numeric" placeholder="PIN (4–6 raqam, ixtiyoriy)" autocomplete="off">
     <div id="genderRow"><button data-g="m">Erkak</button><button data-g="f">Ayol</button></div>
     <button id="startBtn">Boshlash</button>
     <div id="loadTxt"></div>
+    <button id="replayBtn" class="hide">Boshidagi videoni ko'rish</button>
   </div>
 </div>
 
@@ -105,6 +122,7 @@ select{font:inherit;padding:4px 8px;border-radius:8px;border:1px solid #c9a66b;b
     <div class="pill"><span class="coin"></span><span id="money">0 so'm</span></div>
     <div class="pill" id="ratingPill">★ <span id="rating">4.0</span></div>
     <div class="pill hide" id="eventPill" style="background:rgba(194,24,91,.85)"><span id="eventTxt"></span></div>
+    <button class="pill" id="chatToggle" title="Chat (Enter)">💬</button>
   </div>
   <button id="bossBtn">Boshqaruv</button>
   <div id="guide" class="pill"><span id="arrow"></span><span id="guideTxt"></span></div>
@@ -115,7 +133,7 @@ select{font:inherit;padding:4px 8px;border-radius:8px;border:1px solid #c9a66b;b
   </div>
   <div id="topR">
     <div class="pill"><span style="width:9px;height:9px;border-radius:50%;background:#4fc3f7;display:inline-block"></span><span id="online">Oflayn</span></div>
-    <button class="pill muteBtn" style="color:#fff;border:0">🔊</button>
+    <div style="display:flex;gap:6px"><button class="pill" id="musicBtn" style="color:#fff;border:0;font-size:16px">♫</button><button class="pill muteBtn" style="color:#fff;border:0">🔊</button></div>
   </div>
   <div id="chatWrap">
     <div id="chatLog"></div>
